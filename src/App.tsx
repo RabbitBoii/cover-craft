@@ -1,7 +1,15 @@
 import { useState, useRef, useEffect } from 'react';
-import type { Mode, TabId, SavedCover, SearchResult, EmbedStatus } from './types';
-import { ollamaChat, ollamaEmbed, OLLAMA_CHAT_MODEL } from './lib/ollama';
-import { loadCovers, saveCover, deleteCover, searchCovers } from './lib/storage';
+import type { Mode, TabId, EmbedStatus } from './types';
+import {
+  generateStream,
+  listApplications,
+  searchApplications,
+  deleteApplication,
+  updateApplicationStatus,
+  type ApplicationOut,
+  type SearchResultOut,
+  type ApplicationStatus,
+} from './lib/api';
 
 const MODES: Mode[] = [
   { id: 'cover_letter', label: 'Cover Letter', icon: '📄', prompt: 'Write a compelling, tailored cover letter' },
@@ -32,11 +40,12 @@ function App() {
   const [embedStatus, setEmbedStatus] = useState<EmbedStatus>('idle');
 
   // History
-  const [covers, setCovers] = useState<SavedCover[]>([]);
+  const [covers, setCovers] = useState<ApplicationOut[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null);
+  const [searchResults, setSearchResults] = useState<SearchResultOut[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [statusUpdating, setStatusUpdating] = useState<string | null>(null);
 
   const fileRef = useRef<HTMLInputElement>(null);
   const outputRef = useRef<HTMLDivElement>(null);
@@ -45,7 +54,8 @@ function App() {
     const saved = localStorage.getItem('cc_context');
     const savedName = localStorage.getItem('cc_filename');
     if (saved) { setContext(saved); setFileName(savedName || ''); }
-    setCovers(loadCovers());
+    // Load applications from backend
+    listApplications().then(setCovers).catch(console.error);
   }, []);
 
   useEffect(() => {
@@ -92,60 +102,43 @@ function App() {
     setTab('output');
 
     const selectedMode = MODES.find((m) => m.id === mode)!;
-    const systemPrompt = `You are a professional job application assistant. Use the user's personal context below to write responses that sound authentically like them — not generic.
-
-USER CONTEXT:
-${context}
-
-Rules:
-- Match the tone and personality described in the context
-- Be specific and concrete, reference actual projects/skills from context
-- No filler phrases, no clichés
-- Sound human, not like a bot wrote it
-- If a job description is provided, tailor tightly to it`;
-
-    let userMsg = `${selectedMode.prompt} for the role of "${jobTitle}" at "${company}".`;
-    if (jd.trim()) userMsg += `\n\nJob description:\n${jd}`;
-    if (extra.trim()) userMsg += `\n\nAdditional instructions: ${extra}`;
-
     let full = '';
-    try {
-      await ollamaChat(
-        [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userMsg },
-        ],
-        (chunk) => {
-          full += chunk;
-          setOutput(full);
-        }
-      );
 
-      // Auto-embed and persist after generation
-      setEmbedStatus('embedding');
-      try {
-        const embedding = await ollamaEmbed(full);
-        const cover: SavedCover = {
-          id: crypto.randomUUID(),
-          jobTitle,
+    try {
+      await generateStream(
+        {
+          job_title: jobTitle,
           company,
           mode,
-          modeLabel: selectedMode.label,
-          text: full,
-          embedding,
-          createdAt: new Date().toISOString(),
-          wordCount: full.trim().split(/\s+/).filter(Boolean).length,
-        };
-        saveCover(cover);
-        setCovers(loadCovers());
-        setEmbedStatus('done');
-      } catch {
-        setEmbedStatus('error');
-      }
+          mode_label: selectedMode.label,
+          jd,
+          extra,
+          context,
+        },
+        {
+          onChunk: (text) => {
+            full += text;
+            setOutput(full);
+          },
+          onDone: (_id, _wc) => {
+            setEmbedStatus('embedding');
+          },
+          onSaved: (_id) => {
+            setEmbedStatus('done');
+            // Refresh history from backend
+            listApplications().then(setCovers).catch(console.error);
+          },
+          onError: (msg) => {
+            setEmbedStatus('error');
+            if (!full) setOutput(`⚠ Error: ${msg}\n\nMake sure the backend is running:\n  cd backend && uvicorn main:app --reload`);
+          },
+        }
+      );
     } catch (err) {
       setOutput(
-        `⚠ Error: ${(err as Error).message}\n\nMake sure Ollama is running:\n  ollama serve\n\nAnd the model is pulled:\n  ollama pull ${OLLAMA_CHAT_MODEL}`
+        `⚠ Error: ${(err as Error).message}\n\nMake sure the backend is running:\n  cd backend && uvicorn main:app --reload`
       );
+      setEmbedStatus('error');
     } finally {
       setLoading(false);
     }
@@ -161,8 +154,8 @@ Rules:
     if (!searchQuery.trim()) { setSearchResults(null); return; }
     setSearching(true);
     try {
-      const embedding = await ollamaEmbed(searchQuery);
-      setSearchResults(searchCovers(embedding));
+      const results = await searchApplications(searchQuery);
+      setSearchResults(results);
     } catch (err) {
       console.error('Search error', err);
     } finally {
@@ -170,15 +163,39 @@ Rules:
     }
   };
 
-  const handleDeleteCover = (id: string) => {
-    deleteCover(id);
-    setCovers(loadCovers());
+  const handleDeleteCover = async (id: string) => {
+    await deleteApplication(id).catch(console.error);
+    setCovers((prev) => prev.filter((c) => c.id !== id));
     if (searchResults) setSearchResults(searchResults.filter((r) => r.id !== id));
+  };
+
+  const STATUS_ORDER: ApplicationStatus[] = ['generated', 'applied', 'interview', 'offered', 'rejected'];
+  const STATUS_COLORS: Record<ApplicationStatus, string> = {
+    generated: '#6366f1',
+    applied: '#3b82f6',
+    interview: '#f59e0b',
+    offered: '#22c55e',
+    rejected: '#ef4444',
+  };
+
+  const handleStatusChange = async (id: string, newStatus: ApplicationStatus) => {
+    setStatusUpdating(id);
+    try {
+      const updated = await updateApplicationStatus(id, newStatus);
+      setCovers((prev) => prev.map((c) => (c.id === id ? { ...c, status: updated.status } : c)));
+      if (searchResults) {
+        setSearchResults(searchResults.map((r) => (r.id === id ? { ...r, status: updated.status } : r)));
+      }
+    } catch (err) {
+      console.error('Status update error', err);
+    } finally {
+      setStatusUpdating(null);
+    }
   };
 
   const contextChars = context.length;
   const canGenerate = Boolean(context.trim() && jobTitle.trim() && company.trim());
-  const displayCovers: (SavedCover | SearchResult)[] = searchResults ?? covers;
+  const displayCovers: (ApplicationOut | SearchResultOut)[] = searchResults ?? covers;
 
   const formatDate = (iso: string) =>
     new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -218,7 +235,7 @@ Rules:
         <div className="sidebar-footer">
           <div className="model-pill">
             <span className="model-dot" />
-            <span>{OLLAMA_CHAT_MODEL}</span>
+            <span>llama-3.3-70b</span>
           </div>
           {context ? (
             <div className="ctx-pill">
@@ -478,7 +495,7 @@ Rules:
             <div className="cover-list">
               {displayCovers.map((cover) => {
                 const isExpanded = expandedId === cover.id;
-                const score = 'score' in cover ? (cover as SearchResult).score : null;
+                const score = 'score' in cover ? (cover as SearchResultOut).score : null;
                 return (
                   <div key={cover.id} className={`cover-card ${isExpanded ? 'expanded' : ''}`}>
                     <div className="cover-card-header">
@@ -501,6 +518,17 @@ Rules:
                         {score !== null && (
                           <span className="score-badge">{(score * 100).toFixed(0)}%</span>
                         )}
+                        <select
+                          className="status-select"
+                          value={cover.status}
+                          disabled={statusUpdating === cover.id}
+                          style={{ borderColor: STATUS_COLORS[cover.status as ApplicationStatus] ?? '#6366f1' }}
+                          onChange={(e) => handleStatusChange(cover.id, e.target.value as ApplicationStatus)}
+                        >
+                          {STATUS_ORDER.map((s) => (
+                            <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
+                          ))}
+                        </select>
                         <button
                           className="btn-ghost btn-sm"
                           onClick={() => setExpandedId(isExpanded ? null : cover.id)}

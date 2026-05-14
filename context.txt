@@ -1,0 +1,66 @@
+# Personal Context — Chetan
+# Used as system prompt in CoverCraft. Keep this honest, specific, and updated.
+
+## Who I am
+Final-year student at IIT Roorkee (Integrated M.Sc., Mathematics and Computing, graduating 2025).
+Full-stack AI developer and builder — I don't just implement things, I think deeply about the problem first:
+what needs to be built, why, and what I need to know before I start. I'm driven by curiosity more than
+anything else. I want to work somewhere that gives me real ownership and problems worth caring about.
+
+## Current role
+Frontend Intern at Lirion — a tokenized real-estate platform. Built the landing page (complex animations,
+clean design), implemented the app's auth flow, and handled API integration for fetching users, properties,
+and other platform data.
+
+## Projects
+
+### Habit AI (strongest project)
+Full-stack productivity app that uses Groq AI (Llama) to break down tasks into smaller, prioritized chunks
+with autonomous goal analysis. Tech: Next.js 14, Tailwind CSS, PostgreSQL, tRPC (type-safe API calls),
+Groq AI. Deployed on Vercel. Built to demonstrate a real understanding of modern full-stack architecture —
+not just gluing libraries together.
+
+### AI Trip Planner
+Generates customized travel itineraries based on user inputs: number of people, budget, destination, days.
+Returns hotel and place recommendations with specific timings. Tech: React, Tailwind CSS, Firebase,
+Firestore, Node.js, Gemini API. Deployed and live.
+
+### VS Code Extension
+Built a VS Code extension (see additional details in resume). Demonstrates understanding of editor tooling
+and developer experience.
+
+## Skills & Stack
+Frontend: Next.js, React, TypeScript, Tailwind CSS, GSAP (animations)
+Backend: Node.js, FastAPI, tRPC, PostgreSQL, Firebase/Firestore
+AI/ML: Groq API, Gemini API, LangChain, RAG systems, agentic AI (actively learning)
+Tools: Git, Vercel, Supabase
+
+## What I'm learning right now
+Agentic AI and RAG systems — I genuinely believe autonomous agents are the right way to solve a lot of
+real problems, not just hype. Actively going through LangChain Academy's Deep Agents course. Also exploring
+music production (creating > consuming — been into music since I was a kid, now learning to make it).
+
+## Tone & personality
+Deeply curious. I think about problems before jumping to solutions — I want to understand the why before
+the how. Direct and honest, no corporate fluff. I care about craft: clean code, good design, things that
+actually ship. I'm not looking for a job, I'm looking for a place I can love working at. Terrible at
+pretending to be passionate about things I'm not — so I won't.
+
+Outside work: Valorant (genuinely good at game sense and strat-making, which is just systems thinking
+with better graphics), music production, DJing.
+
+## What I want in a role
+- Real ownership over features or products, not ticket-grinding
+- A team that's building something that matters
+- Space to learn — AI is moving fast and I want to be in the middle of it
+- Good culture — I work best when I love where I work
+
+## What I don't want
+- Stagnant, boring CRUD work with no creative or technical challenge
+- Toxic grind culture where output is measured in hours not impact
+- Places where I'm just a cog — I want to understand the full system
+
+## Targeting
+SDE / Full-stack / AI-integrated roles at product companies and startups. Open to frontend-heavy,
+backend-heavy, or full-stack. Particularly interested in companies building with AI at the core —
+not just slapping a chatbot on an existing product.

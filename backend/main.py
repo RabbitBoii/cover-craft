@@ -1,0 +1,427 @@
+"""
+Coverizer FastAPI Backend
+- POST /generate       : Groq streaming (SSE) + Ollama embed + ChromaDB + SQLite
+- POST /search         : Semantic search via ChromaDB + SQLite metadata join
+- PATCH /applications/:id/status : Update application status & notes
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import uuid
+import logging
+from datetime import datetime, timezone
+from typing import AsyncGenerator, Literal, Optional
+
+import chromadb
+import httpx
+import requests
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+from sqlalchemy import create_engine, String, Integer, Text
+from sqlalchemy.orm import DeclarativeBase, Session, Mapped, mapped_column
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# ── Config ────────────────────────────────────────────────────────────────────
+load_dotenv()
+
+GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+GROQ_MODEL: str = "llama-3.3-70b-versatile"
+GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
+
+OLLAMA_BASE: str = "http://localhost:11434"
+OLLAMA_EMBED_MODEL: str = "nomic-embed-text"
+
+SQLITE_PATH: str = "coverizer.db"
+CHROMA_PATH: str = "./chroma_store"
+CHROMA_COLLECTION: str = "cover_letters"
+
+# ── SQLAlchemy ────────────────────────────────────────────────────────────────
+engine = create_engine(
+    f"sqlite:///{SQLITE_PATH}",
+    connect_args={"check_same_thread": False},
+)
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+# Use a plain str alias so Pylance doesn't complain about Literal as annotation
+ApplicationStatus = Literal["generated", "applied", "interview", "offered", "rejected"]
+
+
+class Application(Base):
+    __tablename__ = "applications"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    job_title: Mapped[str] = mapped_column(String, nullable=False)
+    company: Mapped[str] = mapped_column(String, nullable=False)
+    mode: Mapped[str] = mapped_column(String, nullable=False)
+    mode_label: Mapped[str] = mapped_column(String, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    word_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="generated")
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+Base.metadata.create_all(engine)
+
+# ── ChromaDB ──────────────────────────────────────────────────────────────────
+chroma_client = chromadb.PersistentClient(path=CHROMA_PATH)
+collection = chroma_client.get_or_create_collection(
+    name=CHROMA_COLLECTION,
+    metadata={"hnsw:space": "cosine"},
+)
+
+# ── FastAPI ───────────────────────────────────────────────────────────────────
+app = FastAPI(title="Coverizer API", version="1.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ── Pydantic models ───────────────────────────────────────────────────────────
+class GenerateRequest(BaseModel):
+    job_title: str
+    company: str
+    mode: str
+    mode_label: str = ""
+    jd: str = ""
+    extra: str = ""
+    context: str
+
+
+class SearchRequest(BaseModel):
+    query: str
+    top_k: int = Field(default=10, ge=1, le=50)
+
+
+class StatusPatch(BaseModel):
+    status: str  # one of: generated | applied | interview | offered | rejected
+    notes: Optional[str] = None
+
+
+# Response shapes matching the TS ApplicationOut / SearchResultOut types
+class ApplicationOut(BaseModel):
+    id: str
+    jobTitle: str
+    company: str
+    mode: str
+    modeLabel: str
+    text: str
+    wordCount: int
+    status: str
+    notes: Optional[str]
+    createdAt: str
+
+
+class SearchResultOut(ApplicationOut):
+    score: float
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+MODE_LABELS: dict[str, str] = {
+    "cover_letter": "Cover Letter",
+    "why_company": "Why This Company",
+    "what_interests": "What Interests You",
+    "strengths": "Strengths for Role",
+}
+
+VALID_STATUSES: set[str] = {"generated", "applied", "interview", "offered", "rejected"}
+
+
+def _word_count(text: str) -> int:
+    return len(text.strip().split())
+
+
+def _record_to_out(record: Application) -> ApplicationOut:
+    """Convert an ORM Application row to the Pydantic output model."""
+    return ApplicationOut(
+        id=record.id,
+        jobTitle=record.job_title,
+        company=record.company,
+        mode=record.mode,
+        modeLabel=record.mode_label or MODE_LABELS.get(record.mode, record.mode),
+        text=record.text,
+        wordCount=record.word_count,
+        status=record.status,
+        notes=record.notes,
+        createdAt=record.created_at.isoformat(),
+    )
+
+
+def _get_ollama_embedding(text: str) -> list[float]:
+    """Call Ollama nomic-embed-text and return the embedding vector."""
+    try:
+        resp = requests.post(
+            f"{OLLAMA_BASE}/api/embeddings",
+            json={"model": OLLAMA_EMBED_MODEL, "prompt": text},
+            timeout=60,
+        )
+        resp.raise_for_status()
+        data: dict = resp.json()
+        return list(data["embedding"])
+    except Exception as exc:
+        logger.error("Ollama embedding error: %s", exc)
+        raise HTTPException(status_code=502, detail=f"Ollama embedding failed: {exc}")
+
+
+def _persist(app_id: str, req: GenerateRequest, full_text: str) -> None:
+    """Save metadata to SQLite and the embedding vector to ChromaDB."""
+    wc = _word_count(full_text)
+    mode_label = req.mode_label or MODE_LABELS.get(req.mode, req.mode)
+
+    # 1. SQLite
+    with Session(engine) as session:
+        record = Application(
+            id=app_id,
+            job_title=req.job_title,
+            company=req.company,
+            mode=req.mode,
+            mode_label=mode_label,
+            text=full_text,
+            word_count=wc,
+            status="generated",
+        )
+        session.add(record)
+        session.commit()
+
+    # 2. Embed → ChromaDB
+    embedding = _get_ollama_embedding(full_text)
+    collection.add(
+        ids=[app_id],
+        embeddings=[embedding],
+        metadatas=[{"job_title": req.job_title, "company": req.company, "mode": req.mode}],
+    )
+    logger.info("Persisted application %s", app_id)
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+
+@app.get("/health")
+def health() -> dict:
+    return {"status": "ok"}
+
+
+@app.post("/generate")
+async def generate(req: GenerateRequest) -> StreamingResponse:
+    """
+    Stream Groq completion as SSE.
+    After the stream ends, embed via Ollama and persist to SQLite + ChromaDB.
+
+    SSE events:
+      data: {"type": "chunk",  "text": "..."}
+      data: {"type": "done",   "id": "<uuid>", "wordCount": N}
+      data: {"type": "saved",  "id": "<uuid>"}
+      data: {"type": "error",  "message": "..."}
+    """
+    if not GROQ_API_KEY:
+        raise HTTPException(status_code=500, detail="GROQ_API_KEY not configured in backend/.env")
+
+    app_id = str(uuid.uuid4())
+
+    system_prompt = (
+        "You are a professional job application assistant. "
+        "Use the user's personal context below to write responses that sound "
+        "authentically like them — not generic.\n\n"
+        f"USER CONTEXT:\n{req.context}\n\n"
+        "Rules:\n"
+        "- Match the tone and personality described in the context\n"
+        "- Be specific and concrete, reference actual projects/skills from context\n"
+        "- No filler phrases, no clichés\n"
+        "- Sound human, not like a bot wrote it\n"
+        "- If a job description is provided, tailor tightly to it"
+    )
+
+    mode_prompts: dict[str, str] = {
+        "cover_letter": "Write a compelling, tailored cover letter",
+        "why_company": "Answer 'Why do you want to work here?' authentically and specifically",
+        "what_interests": "Answer 'What interests you about this role?' with genuine enthusiasm and specifics",
+        "strengths": "Answer 'What are your key strengths for this role?' concisely and confidently",
+    }
+    mode_instruction = mode_prompts.get(req.mode, req.mode_label or req.mode)
+    user_msg = f'{mode_instruction} for the role of "{req.job_title}" at "{req.company}".'
+    if req.jd.strip():
+        user_msg += f"\n\nJob description:\n{req.jd}"
+    if req.extra.strip():
+        user_msg += f"\n\nAdditional instructions: {req.extra}"
+
+    async def event_stream() -> AsyncGenerator[str, None]:
+        full_text = ""
+        try:
+            async with httpx.AsyncClient(timeout=120) as client:
+                async with client.stream(
+                    "POST",
+                    f"{GROQ_BASE_URL}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {GROQ_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": GROQ_MODEL,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_msg},
+                        ],
+                        "stream": True,
+                        "temperature": 0.7,
+                        "max_tokens": 2048,
+                    },
+                ) as response:
+                    if response.status_code != 200:
+                        body = await response.aread()
+                        msg = f"Groq API error {response.status_code}: {body.decode()}"
+                        logger.error(msg)
+                        yield f"data: {json.dumps({'type': 'error', 'message': msg})}\n\n"
+                        return
+
+                    async for line in response.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        raw = line[6:]  # strip "data: "
+                        if raw.strip() == "[DONE]":
+                            break
+                        try:
+                            payload: dict = json.loads(raw)
+                            delta: str = payload["choices"][0]["delta"].get("content", "")
+                            if delta:
+                                full_text += delta
+                                yield f"data: {json.dumps({'type': 'chunk', 'text': delta})}\n\n"
+                        except (json.JSONDecodeError, KeyError, IndexError):
+                            continue
+
+            # Generation complete
+            wc = _word_count(full_text)
+            yield f"data: {json.dumps({'type': 'done', 'id': app_id, 'wordCount': wc})}\n\n"
+
+            # Persist
+            try:
+                _persist(app_id, req, full_text)
+                yield f"data: {json.dumps({'type': 'saved', 'id': app_id})}\n\n"
+            except Exception as save_err:
+                logger.error("Persist error: %s", save_err)
+                yield f"data: {json.dumps({'type': 'error', 'message': f'Save failed: {save_err}'})}\n\n"
+
+        except Exception as exc:
+            logger.error("Stream error: %s", exc)
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.post("/search", response_model=list[SearchResultOut])
+def search(req: SearchRequest) -> list[SearchResultOut]:
+    """
+    Embed query via Ollama → cosine search in ChromaDB → join metadata from SQLite.
+    """
+    total = collection.count()
+    if total == 0:
+        return []
+
+    query_embedding = _get_ollama_embedding(req.query)
+    n = min(req.top_k, total)
+
+    raw = collection.query(
+        query_embeddings=[query_embedding],
+        n_results=n,
+        include=["distances"],  # type: ignore[list-item]
+    )
+
+    # ChromaDB returns Optional lists; guard against None
+    id_list: list[str] = (raw.get("ids") or [[]])[0]
+    dist_list: list[float] = (raw.get("distances") or [[]])[0]
+
+    if not id_list:
+        return []
+
+    with Session(engine) as session:
+        records = session.query(Application).filter(Application.id.in_(id_list)).all()
+
+    record_map: dict[str, Application] = {r.id: r for r in records}
+    out: list[SearchResultOut] = []
+
+    for rid, dist in zip(id_list, dist_list):
+        record = record_map.get(rid)
+        if record is None:
+            continue
+        score = round(1.0 - float(dist), 4)  # cosine distance → similarity
+        out.append(
+            SearchResultOut(
+                **_record_to_out(record).model_dump(),
+                score=score,
+            )
+        )
+
+    out.sort(key=lambda x: x.score, reverse=True)
+    return out
+
+
+@app.patch("/applications/{app_id}/status", response_model=ApplicationOut)
+def update_status(app_id: str, patch: StatusPatch) -> ApplicationOut:
+    """
+    Update application status and/or notes in SQLite.
+    Valid statuses: generated → applied → interview → offered → rejected
+    """
+    if patch.status not in VALID_STATUSES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid status '{patch.status}'. Must be one of: {sorted(VALID_STATUSES)}",
+        )
+
+    with Session(engine) as session:
+        record = session.query(Application).filter(Application.id == app_id).first()
+        if record is None:
+            raise HTTPException(status_code=404, detail=f"Application '{app_id}' not found")
+
+        record.status = patch.status
+        if patch.notes is not None:
+            record.notes = patch.notes
+
+        session.commit()
+        session.refresh(record)
+        return _record_to_out(record)
+
+
+@app.get("/applications", response_model=list[ApplicationOut])
+def list_applications() -> list[ApplicationOut]:
+    """Return all applications, newest first."""
+    with Session(engine) as session:
+        records = session.query(Application).order_by(Application.created_at.desc()).all()
+        return [_record_to_out(r) for r in records]
+
+
+@app.delete("/applications/{app_id}", status_code=204)
+def delete_application(app_id: str) -> None:
+    """Delete an application from SQLite and ChromaDB."""
+    with Session(engine) as session:
+        record = session.query(Application).filter(Application.id == app_id).first()
+        if record is None:
+            raise HTTPException(status_code=404, detail=f"Application '{app_id}' not found")
+        session.delete(record)
+        session.commit()
+
+    try:
+        collection.delete(ids=[app_id])
+    except Exception as exc:
+        logger.warning("ChromaDB delete warning for %s: %s", app_id, exc)
