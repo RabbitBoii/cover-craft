@@ -6,6 +6,7 @@ Coverizer FastAPI Backend
 """
 
 from __future__ import annotations
+from contextlib import asynccontextmanager
 
 import json
 import os
@@ -14,9 +15,9 @@ import logging
 from datetime import datetime, timezone
 from typing import AsyncGenerator, Literal, Optional
 
-import chromadb
+from google import genai
+from pinecone import Pinecone
 import httpx
-import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -36,18 +37,16 @@ GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL: str = "llama-3.3-70b-versatile"
 GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
 
-OLLAMA_BASE: str = "http://localhost:11434"
-OLLAMA_EMBED_MODEL: str = "nomic-embed-text"
+GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+PINECONE_API_KEY: str = os.getenv("PINECONE_KEY", "")
+PINECONE_INDEX: str = "coverizer"    
+DATABASE_URL: str = os.getenv("DATABASE_URL", "")
 
-SQLITE_PATH: str = "coverizer.db"
-CHROMA_PATH: str = "./chroma_store"
-CHROMA_COLLECTION: str = "cover_letters"
 
-# ── SQLAlchemy ────────────────────────────────────────────────────────────────
-engine = create_engine(
-    f"sqlite:///{SQLITE_PATH}",
-    connect_args={"check_same_thread": False},
-)
+
+# ── Postgres ────────────────────────────────────────────────────────────────
+
+engine = create_engine(DATABASE_URL, connect_args={"connect_timeout": 10})
 
 
 class Base(DeclarativeBase):
@@ -73,17 +72,28 @@ class Application(Base):
     created_at: Mapped[datetime] = mapped_column(nullable=False, default=lambda: datetime.now(timezone.utc))
 
 
-Base.metadata.create_all(engine)
+# create_all is called in the lifespan startup event below
 
-# ── ChromaDB ──────────────────────────────────────────────────────────────────
-chroma_client = chromadb.PersistentClient(path=CHROMA_PATH)
-collection = chroma_client.get_or_create_collection(
-    name=CHROMA_COLLECTION,
-    metadata={"hnsw:space": "cosine"},
-)
+
+genai_client = genai.Client(api_key=GEMINI_API_KEY)
+pc = Pinecone(api_key=PINECONE_API_KEY)
+index = pc.Index(PINECONE_INDEX)
+
 
 # ── FastAPI ───────────────────────────────────────────────────────────────────
-app = FastAPI(title="Coverizer API", version="1.0.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Run DB migrations on startup; gracefully warn if DB is unreachable."""
+    try:
+        Base.metadata.create_all(engine)
+        logger.info("Database tables verified/created.")
+    except Exception as exc:
+        logger.warning("Could not connect to database at startup: %s", exc)
+        logger.warning("Check DATABASE_URL in .env and ensure Supabase project is active.")
+    yield
+
+
+app = FastAPI(title="Coverizer API", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -164,20 +174,23 @@ def _record_to_out(record: Application) -> ApplicationOut:
     )
 
 
-def _get_ollama_embedding(text: str) -> list[float]:
-    """Call Ollama nomic-embed-text and return the embedding vector."""
+def _get_embedding(text: str) -> list[float]:
+    """Call Gemini embed_content and return the embedding vector."""
     try:
-        resp = requests.post(
-            f"{OLLAMA_BASE}/api/embeddings",
-            json={"model": OLLAMA_EMBED_MODEL, "prompt": text},
-            timeout=60,
+        result = genai_client.models.embed_content(
+            model="text-embedding-004",
+            contents=text,
         )
-        resp.raise_for_status()
-        data: dict = resp.json()
-        return list(data["embedding"])
+        if not result.embeddings:
+            raise ValueError("Gemini returned no embeddings")
+        values = result.embeddings[0].values
+        if values is None:
+            raise ValueError("Gemini embedding values are None")
+        return list(values)
+
     except Exception as exc:
-        logger.error("Ollama embedding error: %s", exc)
-        raise HTTPException(status_code=502, detail=f"Ollama embedding failed: {exc}")
+        logger.error("Gemini embedding error: %s", exc)
+        raise HTTPException(status_code=502, detail=f"Embedding failed: {exc}")
 
 
 def _persist(app_id: str, req: GenerateRequest, full_text: str) -> None:
@@ -200,13 +213,13 @@ def _persist(app_id: str, req: GenerateRequest, full_text: str) -> None:
         session.add(record)
         session.commit()
 
-    # 2. Embed → ChromaDB
-    embedding = _get_ollama_embedding(full_text)
-    collection.add(
-        ids=[app_id],
-        embeddings=[embedding],
-        metadatas=[{"job_title": req.job_title, "company": req.company, "mode": req.mode}],
-    )
+    # 2. Embed → Pinecone
+    embedding = _get_embedding(full_text)
+    index.upsert(vectors=[{
+        "id": app_id,
+        "values": embedding,
+        "metadata": {"job_title": req.job_title, "company": req.company, "mode": req.mode}
+}])
     logger.info("Persisted application %s", app_id)
 
 
@@ -335,22 +348,21 @@ def search(req: SearchRequest) -> list[SearchResultOut]:
     """
     Embed query via Ollama → cosine search in ChromaDB → join metadata from SQLite.
     """
-    total = collection.count()
-    if total == 0:
-        return []
+    query_embedding = _get_embedding(req.query)
 
-    query_embedding = _get_ollama_embedding(req.query)
-    n = min(req.top_k, total)
-
-    raw = collection.query(
-        query_embeddings=[query_embedding],
-        n_results=n,
-        include=["distances"],  # type: ignore[list-item]
+    raw = index.query(
+    vector=query_embedding,
+        top_k=req.top_k,
+        include_metadata=True
     )
 
-    # ChromaDB returns Optional lists; guard against None
-    id_list: list[str] = (raw.get("ids") or [[]])[0]
-    dist_list: list[float] = (raw.get("distances") or [[]])[0]
+    matches = raw.get("matches", [])
+    if not matches:
+        return []
+
+    id_list = [match['id'] for match in matches]
+    dist_list = [match['score'] for match in matches]
+
 
     if not id_list:
         return []
@@ -365,7 +377,7 @@ def search(req: SearchRequest) -> list[SearchResultOut]:
         record = record_map.get(rid)
         if record is None:
             continue
-        score = round(1.0 - float(dist), 4)  # cosine distance → similarity
+        score = round(float(dist), 4)  # cosine distance → similarity
         out.append(
             SearchResultOut(
                 **_record_to_out(record).model_dump(),
@@ -422,6 +434,6 @@ def delete_application(app_id: str) -> None:
         session.commit()
 
     try:
-        collection.delete(ids=[app_id])
+        index.delete(ids=[app_id])
     except Exception as exc:
         logger.warning("ChromaDB delete warning for %s: %s", app_id, exc)
