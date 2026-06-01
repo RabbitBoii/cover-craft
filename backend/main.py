@@ -15,7 +15,9 @@ import logging
 from datetime import datetime, timezone
 from typing import AsyncGenerator, Literal, Optional
 
-import requests
+
+from google import genai
+from google.genai import types
 from pinecone import Pinecone
 import httpx
 from dotenv import load_dotenv
@@ -37,8 +39,9 @@ GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL: str = "llama-3.3-70b-versatile"
 GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
 
-HF_API_KEY: str = os.getenv("HF_API_KEY", "")
+GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 PINECONE_API_KEY: str = os.getenv("PINECONE_KEY", "")
+genai_client = genai.Client(api_key=GEMINI_API_KEY)
 PINECONE_INDEX: str = "coverizer"    
 DATABASE_URL: str = os.getenv("DATABASE_URL", "")
 
@@ -74,7 +77,7 @@ class Application(Base):
 
 # create_all is called in the lifespan startup event below
 
-HF_EMBED_URL = "https://api-inference.huggingface.co/pipeline/feature-extraction/nomic-ai/nomic-embed-text-v1"
+GEMINI_EMBED_MODEL = "models/text-embedding-004"
 pc = Pinecone(api_key=PINECONE_API_KEY)
 index = pc.Index(PINECONE_INDEX)
 
@@ -174,23 +177,21 @@ def _record_to_out(record: Application) -> ApplicationOut:
 
 
 def _get_embedding(text: str) -> list[float]:
-    """Call Gemini embed_content and return the embedding vector."""
+    """Call Gemini text-embedding-004 via stable SDK and return the embedding vector."""
     try:
-        res = requests.post(
-            HF_EMBED_URL, 
-            headers={
-                "Authorization": f"Bearer {HF_API_KEY}"
-            }, 
-            json={
-                "inputs": text, "options": {"wait_for_model": True}
-            },
-            timeout=30
+        result = genai_client.models.embed_content(
+            model="gemini-embedding-2",
+            contents=text,
+            config=types.EmbedContentConfig(output_dimensionality=768)
         )
-        res.raise_for_status()
-        result = res.json()
-        return result[0] if isinstance(result[0], list) else result
+        if not result.embeddings:
+            raise ValueError("Gemini returned no embeddings")
+        values = result.embeddings[0].values
+        if values is None:
+            raise ValueError("Gemini embedding values are None")
+        return list(values)
     except Exception as exc:
-        logger.error("HF embedding error: %s", exc)
+        logger.error("Gemini embedding error: %s", exc)
         raise HTTPException(status_code=502, detail=f"Embedding failed: {exc}")
 
 def _persist(app_id: str, req: GenerateRequest, full_text: str) -> None:
