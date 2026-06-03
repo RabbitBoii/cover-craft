@@ -1,11 +1,12 @@
 /**
  * coverizer/src/lib/api.ts
  * 
- * Thin client for the FastAPI backend at http://localhost:8000
+ * Thin client for the FastAPI backend.
+ * URL is driven by VITE_API_URL env var — falls back to localhost:8000 for local dev.
  * Mirrors the TS types in ../types.ts
  */
 
-const BASE = 'http://localhost:8000';
+const BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
 // ── Types (extend / replace old localStorage shapes) ──────────────────────────
 

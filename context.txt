@@ -1,66 +1,86 @@
-# Personal Context — Chetan
-# Used as system prompt in CoverCraft. Keep this honest, specific, and updated.
+# Personal Context — Chetan Atram
+# Used as system prompt in CoverCraft. Update this as your situation changes.
 
 ## Who I am
-Final-year student at IIT Roorkee (Integrated M.Sc., Mathematics and Computing, graduating 2025).
-Full-stack AI developer and builder — I don't just implement things, I think deeply about the problem first:
-what needs to be built, why, and what I need to know before I start. I'm driven by curiosity more than
-anything else. I want to work somewhere that gives me real ownership and problems worth caring about.
+Final-year student at IIT Roorkee (Integrated M.Sc., Mathematics and Computing, graduating May 2026).
+Full-stack AI developer and builder. I think deeply about problems before jumping to solutions — I want
+to understand the why and the architecture before writing a line of code. Driven by curiosity, not
+just output. I want to work somewhere that gives me real ownership over things that matter.
 
-## Current role
-Frontend Intern at Lirion — a tokenized real-estate platform. Built the landing page (complex animations,
-clean design), implemented the app's auth flow, and handled API integration for fetching users, properties,
-and other platform data.
+## Contact
+GitHub: Chetan-Atram | LinkedIn: chetan-atram | Email: chetanatram11284@gmail.com
+
+## Experience
+
+### Lirion — Frontend Developer (Jan 2026 – Apr 2026)
+Tokenized real-estate platform (lirion.xyz). Built the pixel-perfect animated marketing site — translated
+complex Figma designs into production-ready Next.js components using Tailwind CSS and GSAP for
+scroll-driven animations. Migrated auth state from React Context to Zustand, cutting unnecessary
+re-renders across auth, KYC, and property listing flows. Integrated REST APIs with Axios and TypeScript
+for authentication and user profile management.
+
+### Nahar Om Group — Frontend Developer (May 2024 – Jul 2024)
+Built the frontend for a dynamic discounting module inside a loan management system using React.js.
+Developed buyer, seller, and admin interfaces for invoice discount management — reduced processing
+time by 40%. Worked with a Python/Django backend team for API integration.
 
 ## Projects
 
-### Habit AI (strongest project)
-Full-stack productivity app that uses Groq AI (Llama) to break down tasks into smaller, prioritized chunks
-with autonomous goal analysis. Tech: Next.js 14, Tailwind CSS, PostgreSQL, tRPC (type-safe API calls),
-Groq AI. Deployed on Vercel. Built to demonstrate a real understanding of modern full-stack architecture —
-not just gluing libraries together.
+### CoverCraft (May 2026) — strongest recent project
+Full-stack AI cover letter and job application answer generator. React + FastAPI + Groq (Llama 3.3-70b),
+streaming responses via SSE for real-time generation. Semantic search over application history using
+ChromaDB and Ollama embeddings — supports natural language queries like "that fintech cover letter
+from last month". Dual-persistence architecture: every generation saved as both a ChromaDB vector and
+a SQLite record keyed by the same UUID. Full application status tracking: generated → applied →
+interview → offered/rejected.
 
-### AI Trip Planner
-Generates customized travel itineraries based on user inputs: number of people, budget, destination, days.
-Returns hotel and place recommendations with specific timings. Tech: React, Tailwind CSS, Firebase,
-Firestore, Node.js, Gemini API. Deployed and live.
+### Codebase Chat (April 2026)
+VS Code extension for natural language querying over any codebase. Embeds source files locally using
+Ollama's nomic-embed-text, storing vectors as JSON for complete code privacy. Replaced HNSWLib with
+a pure-JS cosine similarity implementation to eliminate native C++ build dependencies — works out of
+the box across all environments. Top-5 relevant chunks retrieved per query, passed as grounded context
+to Groq's Llama 3, with source file citations in every answer.
 
-### VS Code Extension
-Built a VS Code extension (see additional details in resume). Demonstrates understanding of editor tooling
-and developer experience.
+### Habit AI (Nov – Dec 2025)
+Full-stack AI-powered project management app. Next.js 14, TypeScript, tRPC for end-to-end type safety.
+Groq (Llama 3.3) for autonomous goal analysis and structured project plan generation with priorities.
+Kanban board with optimistic UI updates via @dnd-kit, progress metrics via Recharts.
 
-## Skills & Stack
-Frontend: Next.js, React, TypeScript, Tailwind CSS, GSAP (animations)
-Backend: Node.js, FastAPI, tRPC, PostgreSQL, Firebase/Firestore
-AI/ML: Groq API, Gemini API, LangChain, RAG systems, agentic AI (actively learning)
-Tools: Git, Vercel, Supabase
+## Tech Stack
+Languages: TypeScript, JavaScript, Python, C++, SQL
+Frontend: React, Next.js 14, Tailwind CSS, GSAP, Shadcn UI, tRPC, Zustand
+Backend: FastAPI, Node.js, Express.js
+AI/ML: Groq API, Ollama, LangChain, ChromaDB, Pinecone, nomic-embed-text, Llama 3, RAG pipelines,
+        vector embeddings, agentic AI (actively learning)
+Databases: PostgreSQL, SQLite, MongoDB, Firebase
+Tools: Git, Prisma, Axios, Vercel
 
-## What I'm learning right now
-Agentic AI and RAG systems — I genuinely believe autonomous agents are the right way to solve a lot of
-real problems, not just hype. Actively going through LangChain Academy's Deep Agents course. Also exploring
-music production (creating > consuming — been into music since I was a kid, now learning to make it).
+## What I'm learning
+Agentic AI and RAG systems — I genuinely believe autonomous agents are the right approach to solving
+real problems, not just hype. Actively exploring LangChain and multi-agent architectures. Also getting
+into music production (been into music since I was a kid, now learning to create it).
 
 ## Tone & personality
-Deeply curious. I think about problems before jumping to solutions — I want to understand the why before
-the how. Direct and honest, no corporate fluff. I care about craft: clean code, good design, things that
-actually ship. I'm not looking for a job, I'm looking for a place I can love working at. Terrible at
-pretending to be passionate about things I'm not — so I won't.
+Deeply curious. I think about the problem space before jumping to solutions. Direct and honest — no
+corporate fluff, no "I am passionate about leveraging synergies." I care about craft: clean code, good
+design, things that actually ship and get used. I'm not looking for a job, I'm looking for a place I
+can love working at. I won't pretend to care about things I don't.
 
-Outside work: Valorant (genuinely good at game sense and strat-making, which is just systems thinking
-with better graphics), music production, DJing.
+Outside work: Valorant (genuinely good at game sense and strat-making — systems thinking with better
+graphics), music production, DJing.
 
-## What I want in a role
+## What I want
 - Real ownership over features or products, not ticket-grinding
-- A team that's building something that matters
-- Space to learn — AI is moving fast and I want to be in the middle of it
-- Good culture — I work best when I love where I work
+- A team building something that matters, ideally with AI at the core
+- Space to learn fast — AI is moving quickly and I want to be in the middle of it
+- Good culture — I do my best work when I love where I work
 
 ## What I don't want
-- Stagnant, boring CRUD work with no creative or technical challenge
-- Toxic grind culture where output is measured in hours not impact
-- Places where I'm just a cog — I want to understand the full system
+- Stagnant CRUD work with no creative or technical challenge
+- Toxic grind culture where hours matter more than impact
+- Places where I'm just a cog with no visibility into the full system
 
 ## Targeting
-SDE / Full-stack / AI-integrated roles at product companies and startups. Open to frontend-heavy,
-backend-heavy, or full-stack. Particularly interested in companies building with AI at the core —
-not just slapping a chatbot on an existing product.
+SDE / Full-stack / AI-integrated roles at product companies and early-stage startups. Open to
+frontend-heavy, backend-heavy, or full-stack. Particularly interested in companies building with AI
+at the core — not retrofitting a chatbot onto an existing product.
