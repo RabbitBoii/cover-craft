@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import logo from './assets/logo.svg';
 import type { Mode, TabId, EmbedStatus } from './types';
 import {
   generateStream,
@@ -10,6 +11,36 @@ import {
   type SearchResultOut,
   type ApplicationStatus,
 } from './lib/api';
+
+const CONTEXT_PROMPT = `I'm setting up a tool that writes cover letters and job-application answers in my voice. Help me build a "context" profile it will use as its system prompt.
+
+If I've pasted my resume below, use it as the primary source — pull my background, education, experience, projects (with concrete details and impact), and skills directly from it. Don't ask me to repeat anything that's already in the resume.
+
+Then ask me a short batch of follow-up questions covering only what a resume can't tell you:
+- What roles/industries am I targeting right now (may differ from my past experience)
+- The tone I want to come across as (e.g. direct, warm, technical, understated)
+- Clichés, buzzwords, or phrases I never want to appear (e.g. "passionate", "thrilled", "synergy")
+- Anything about culture, team, or work style I want to emphasize or avoid
+- Anything I'm currently learning or want to lean into that my resume doesn't show yet
+
+If I haven't pasted a resume, instead interview me with one batch of short questions covering: name and target roles, background (education, experience, current title), 2-4 key projects with concrete impact, core skills and strengths, the tone I want, and what I want to avoid.
+
+Once you have what you need, output the result as plain text in this shape, filled in from my answers:
+
+Name: ...
+Role target: ...
+Background: ...
+Key projects: ...
+Tone: ...
+Strengths: ...
+What I want: ...
+What I don't want: ...
+
+Keep it specific and honest — no filler. Reference actual project names, numbers, and tech from my resume rather than generic descriptions. Give me only the final plain-text block so I can save it as context.txt.
+
+---
+My resume (optional — paste below):`
+
 
 const MODES: Mode[] = [
   { id: 'cover_letter', label: 'Cover Letter', icon: '📄', prompt: 'Write a compelling, tailored cover letter' },
@@ -36,6 +67,7 @@ function App() {
   const [output, setOutput] = useState('');
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [promptCopied, setPromptCopied] = useState(false);
   const [wordCount, setWordCount] = useState(0);
   const [embedStatus, setEmbedStatus] = useState<EmbedStatus>('idle');
 
@@ -146,6 +178,12 @@ function App() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const copyContextPrompt = async () => {
+    await navigator.clipboard.writeText(CONTEXT_PROMPT);
+    setPromptCopied(true);
+    setTimeout(() => setPromptCopied(false), 2000);
+  };
+
   const handleSearch = async () => {
     if (!searchQuery.trim()) { setSearchResults(null); return; }
     setSearching(true);
@@ -198,10 +236,10 @@ function App() {
 
   return (
     <div className="flex h-screen overflow-hidden">
-      {/* ── Sidebar ── */}
-      <aside className="w-[280px] min-w-[280px] bg-bg-2 border-r border-border-main flex flex-col px-4 py-6 gap-8">
+      {/* ── Sidebar (desktop only) ── */}
+      <aside className="hidden md:flex w-[280px] min-w-[280px] bg-bg-2 border-r border-border-main flex-col px-4 py-6 gap-8">
         <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 bg-accent text-bg-main rounded-md flex items-center justify-center font-medium text-xs tracking-wider">CC</div>
+          <img src={logo} alt="CoverCraft" className="w-9 h-9 rounded-lg object-cover ring-1 ring-white/10 shadow-[0_0_14px_rgba(167,139,250,0.22)]" />
           <span className="font-serif text-[18px] text-text-main tracking-tight">CoverCraft</span>
         </div>
 
@@ -247,16 +285,93 @@ function App() {
         </div>
       </aside>
 
+      {/* ── Mobile Top Header ── */}
+      <header className="md:hidden fixed top-0 left-0 right-0 z-50 bg-bg-2/95 backdrop-blur border-b border-border-main flex items-center justify-between px-4 py-3">
+        <div className="flex items-center gap-2.5">
+          <img src={logo} alt="CoverCraft" className="w-8 h-8 rounded-lg object-cover ring-1 ring-white/10 shadow-[0_0_12px_rgba(167,139,250,0.22)]" />
+          <span className="font-serif text-[16px] text-text-main tracking-tight">CoverCraft</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          {context && (
+            <div className="flex items-center gap-1.5 text-[11px] text-text-2 px-2 py-1 rounded-md bg-bg-3 border border-border-main">
+              <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />
+              <span className="truncate max-w-[100px]">{fileName || 'Context active'}</span>
+            </div>
+          )}
+          <div className="flex items-center gap-1 text-[10px] text-text-3 px-2 py-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-purple-400 shadow-[0_0_6px_rgba(167,139,250,0.5)]" />
+            <span>llama-3.3-70b</span>
+          </div>
+        </div>
+      </header>
+
+      {/* ── Mobile Bottom Tab Bar ── */}
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-bg-2/95 backdrop-blur border-t border-border-main flex items-center justify-around px-2 py-2 safe-area-inset-bottom">
+        {([
+          { id: 'setup' as TabId, icon: '◎', label: 'Context' },
+          { id: 'generate' as TabId, icon: '✦', label: 'Generate' },
+          { id: 'output' as TabId, icon: '≡', label: 'Output' },
+          { id: 'history' as TabId, icon: '◷', label: 'History' },
+        ] as const).map((t) => (
+          <button
+            key={t.id}
+            className={`flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-xl border-none cursor-pointer transition-all duration-150 min-w-[60px] ${tab === t.id
+              ? 'bg-bg-4 text-text-main'
+              : 'bg-transparent text-text-3'
+              }`}
+            onClick={() => setTab(t.id)}
+          >
+            <span className="text-base leading-none relative">
+              {t.icon}
+              {t.id === 'setup' && context && (
+                <span className="absolute -top-1 -right-1.5 w-1.5 h-1.5 rounded-full bg-green-400" />
+              )}
+              {t.id === 'output' && output && (
+                <span className="absolute -top-1 -right-1.5 w-1.5 h-1.5 rounded-full bg-green-400" />
+              )}
+              {t.id === 'history' && covers.length > 0 && (
+                <span className="absolute -top-1 -right-1.5 w-1.5 h-1.5 rounded-full bg-green-400" />
+              )}
+            </span>
+            <span className="font-mono text-[10px] tracking-wide">{t.label}</span>
+          </button>
+        ))}
+      </nav>
+
       {/* ── Main ── */}
-      <main className="flex-1 overflow-y-auto px-8 md:px-16 py-12 max-w-[860px] mx-auto w-full">
+      <main className="flex-1 overflow-y-auto px-4 md:px-8 lg:px-16 pt-20 md:pt-12 pb-24 md:pb-12 max-w-[860px] mx-auto w-full">
 
         {/* SETUP */}
         {tab === 'setup' && (
           <div className="flex flex-col gap-6">
             <div>
-              <h1 className="font-serif text-[32px] font-normal tracking-tight text-text-main mb-1">Your Context</h1>
+              <h1 className="font-serif text-[28px] md:text-[32px] font-normal tracking-tight text-text-main mb-1">Your Context</h1>
               <p className="text-[13px] text-text-2">This becomes the system prompt — the AI will always respond as you.</p>
             </div>
+
+            {/* How to create a context — collapsible guide */}
+            <details className="group bg-bg-2 border border-border-main rounded-lg overflow-hidden">
+              <summary className="flex items-center gap-2.5 px-4 py-3 cursor-pointer list-none text-[13px] text-text-main hover:bg-bg-3 transition-colors">
+                <span className="text-accent">✦</span>
+                <span className="flex-1">New here? Generate your context with ChatGPT, Claude, or any LLM</span>
+                <span className="text-text-3 text-xs transition-transform group-open:rotate-90">›</span>
+              </summary>
+              <div className="px-4 pb-4 pt-1 border-t border-border-main flex flex-col gap-3">
+                <p className="text-[13px] text-text-2 leading-relaxed">
+                  Don't have a context file yet? Copy the prompt below, paste it into your favorite LLM,
+                  answer its questions, then save the plain-text result as <code className="text-accent bg-bg-3 px-1.5 py-0.5 rounded">context.txt</code> and upload it here (or paste it directly).
+                </p>
+                <div className="relative">
+                  <pre className="bg-bg-main border border-border-main rounded-lg text-text-2 font-mono text-[12px] leading-relaxed p-3.5 pr-24 whitespace-pre-wrap max-h-[220px] overflow-y-auto">{CONTEXT_PROMPT}</pre>
+                  <button
+                    className="absolute top-2.5 right-2.5 bg-accent text-bg-main border-none rounded px-2.5 py-1.5 font-mono text-[11px] font-medium cursor-pointer transition-opacity hover:opacity-90"
+                    onClick={copyContextPrompt}
+                  >
+                    {promptCopied ? 'Copied ✓' : 'Copy prompt'}
+                  </button>
+                </div>
+              </div>
+            </details>
 
             <div
               className={`border border-dashed border-border-2 rounded-lg p-8 cursor-pointer transition-colors bg-bg-2 hover:border-accent hover:bg-bg-3`}
@@ -319,7 +434,7 @@ function App() {
         {tab === 'generate' && (
           <div className="flex flex-col gap-6">
             <div>
-              <h1 className="font-serif text-[32px] font-normal tracking-tight text-text-main mb-1">Generate</h1>
+              <h1 className="font-serif text-[28px] md:text-[32px] font-normal tracking-tight text-text-main mb-1">Generate</h1>
               <p className="text-[13px] text-text-2">Pick a mode, fill in the details, let it rip.</p>
             </div>
 
@@ -339,7 +454,7 @@ function App() {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="flex flex-col gap-1.5">
                 <label className="text-xs text-text-2 tracking-[0.04em] uppercase">Job title <span className="text-amber-500">*</span></label>
                 <input
@@ -401,7 +516,7 @@ function App() {
         {tab === 'output' && (
           <div className="flex flex-col gap-6">
             <div>
-              <h1 className="font-serif text-[32px] font-normal tracking-tight text-text-main mb-1">Output</h1>
+              <h1 className="font-serif text-[28px] md:text-[32px] font-normal tracking-tight text-text-main mb-1">Output</h1>
               {output && !loading && (
                 <div className="flex gap-2 text-xs text-text-3 mt-1 flex-wrap">
                   <span>{wordCount} words</span>
@@ -439,11 +554,10 @@ function App() {
 
             {/* Embed status */}
             {embedStatus !== 'idle' && (
-              <div className={`flex items-center gap-2 text-xs px-3.5 py-2 rounded-lg border transition-colors ${
-                embedStatus === 'embedding' ? 'text-text-2 bg-bg-2 border-border-main' :
+              <div className={`flex items-center gap-2 text-xs px-3.5 py-2 rounded-lg border transition-colors ${embedStatus === 'embedding' ? 'text-text-2 bg-bg-2 border-border-main' :
                 embedStatus === 'done' ? 'text-green-400 bg-green-400/10 border-green-400/20' :
-                'text-red-400 bg-red-400/10 border-red-400/20'
-              }`}>
+                  'text-red-400 bg-red-400/10 border-red-400/20'
+                }`}>
                 {embedStatus === 'embedding' && <><span className="inline-block w-[13px] h-[13px] border-2 border-white/15 border-t-text-2 rounded-full animate-spin" /> Embedding with nomic-embed-text…</>}
                 {embedStatus === 'done' && '✓ Embedded & saved to History'}
                 {embedStatus === 'error' && '⚠ Embedding failed — cover not saved'}
@@ -451,7 +565,7 @@ function App() {
             )}
 
             {output && (
-              <div className="flex gap-2.5">
+              <div className="flex flex-wrap gap-2.5">
                 <button
                   className="bg-bg-3 text-text-main border border-border-2 rounded-lg px-4.5 py-[9px] font-mono text-[13px] cursor-pointer transition-colors hover:bg-bg-4"
                   onClick={copyOutput}
@@ -479,7 +593,7 @@ function App() {
         {tab === 'history' && (
           <div className="flex flex-col gap-6">
             <div>
-              <h1 className="font-serif text-[32px] font-normal tracking-tight text-text-main mb-1">History</h1>
+              <h1 className="font-serif text-[28px] md:text-[32px] font-normal tracking-tight text-text-main mb-1">History</h1>
               <p className="text-[13px] text-text-2">All generated covers, searchable by meaning via local embeddings.</p>
             </div>
 
@@ -528,7 +642,7 @@ function App() {
                 const score = 'score' in cover ? (cover as SearchResultOut).score : null;
                 return (
                   <div key={cover.id} className={`bg-bg-2 border rounded-xl p-4 flex flex-col gap-2.5 transition-colors hover:border-border-2 ${isExpanded ? 'border-border-2' : 'border-border-main'}`}>
-                    <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start justify-between gap-2 flex-wrap sm:flex-nowrap">
                       <div className="flex items-start gap-3 flex-1 min-w-0">
                         <span className="text-lg shrink-0 mt-0.5">
                           {MODES.find((m) => m.id === cover.mode)?.icon ?? '📄'}
@@ -544,7 +658,7 @@ function App() {
                           </div>
                         </div>
                       </div>
-                      <div className="flex items-center gap-1.5 shrink-0">
+                      <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
                         {score !== null && (
                           <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-purple-400/10 text-purple-400 border border-purple-400/20">{(score * 100).toFixed(0)}%</span>
                         )}

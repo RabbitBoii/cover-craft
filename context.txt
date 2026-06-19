@@ -1,86 +1,31 @@
-# Personal Context — Chetan Atram
-# Used as system prompt in CoverCraft. Update this as your situation changes.
+Name: Chetan Atram
 
-## Who I am
-Final-year student at IIT Roorkee (Integrated M.Sc., Mathematics and Computing, graduating May 2026).
-Full-stack AI developer and builder. I think deeply about problems before jumping to solutions — I want
-to understand the why and the architecture before writing a line of code. Driven by curiosity, not
-just output. I want to work somewhere that gives me real ownership over things that matter.
+Role target: SDE, full-stack, and AI-integrated roles at startups and product companies. Most interested in places building with AI at the core — not retrofitting a chatbot onto an existing product.
 
-## Contact
-GitHub: Chetan-Atram | LinkedIn: chetan-atram | Email: chetanatram11284@gmail.com
+Background: Final-year student at IIT Roorkee (Integrated M.Sc., Mathematics and Computing, graduating May 2026). Full-stack AI developer who thinks about the problem and architecture before writing code — wants to understand the why before the how. Driven by curiosity over output.
 
-## Experience
+Experience:
+- Lirion (Frontend Developer, Jan–Apr 2026, remote): Built and shipped a pixel-perfect animated marketing site for a tokenized real-estate platform — translated complex Figma designs into production Next.js components with Tailwind CSS and GSAP scroll-driven animations. Migrated auth state from React Context to Zustand, cutting unnecessary re-renders across auth, KYC, and property-listing flows. Integrated REST APIs with Axios and TypeScript for end-to-end type safety.
+- Nahar Om Group (Frontend Developer Intern, May–Jul 2024, remote): Engineered the frontend for a dynamic discounting module in a loan-management platform using React.js. Built responsive buyer, seller, and admin dashboards that cut invoice-processing time by 40%. Worked with a Python/Django backend team for API integration.
 
-### Lirion — Frontend Developer (Jan 2026 – Apr 2026)
-Tokenized real-estate platform (lirion.xyz). Built the pixel-perfect animated marketing site — translated
-complex Figma designs into production-ready Next.js components using Tailwind CSS and GSAP for
-scroll-driven animations. Migrated auth state from React Context to Zustand, cutting unnecessary
-re-renders across auth, KYC, and property listing flows. Integrated REST APIs with Axios and TypeScript
-for authentication and user profile management.
+Key projects:
+- CoverCraft (React, FastAPI, ChromaDB, Groq — live, May 2026): Full-stack AI cover-letter generator with real-time SSE response streaming. Layered semantic search over application history using ChromaDB embeddings, enabling natural-language queries like "that fintech cover letter from last month." Dual-persistence architecture saving each output as both a vector and a SQLite record under one UUID, tracking status from generated → applied → interview → offered/rejected.
+- Codebase Chat (VS Code Extension, Ollama, Groq — Apr 2026): VS Code extension for natural-language querying across any local codebase, embedding source files on-device with nomic-embed-text for complete code privacy. Replaced HNSWLib with a pure-JS cosine-similarity engine, removing native C++ build dependencies so it runs out-of-the-box anywhere. Retrieves top-5 chunks per query as grounded context for Groq Llama 3, returning source-file citations with every answer.
+- Habit AI (Next.js 14, TypeScript, tRPC — live, Nov–Dec 2025): Full-stack AI-powered project-management app. Integrated Groq-hosted Llama 3.3 to turn freeform user goals into structured, prioritized project plans. Kanban board with optimistic UI updates (@dnd-kit) and progress visualizations with Recharts.
 
-### Nahar Om Group — Frontend Developer (May 2024 – Jul 2024)
-Built the frontend for a dynamic discounting module inside a loan management system using React.js.
-Developed buyer, seller, and admin interfaces for invoice discount management — reduced processing
-time by 40%. Worked with a Python/Django backend team for API integration.
+Strengths: Shipping full-stack AI products end to end — from frontend craft (React, Next.js, Tailwind, GSAP, type-safe APIs) to backend (FastAPI, tRPC, Node) to the AI layer (Groq, Ollama, LangChain, RAG pipelines, vector embeddings with ChromaDB/Pinecone). Strong at understanding retrieval and embedding systems, not just gluing libraries together. Clean code, good design, things that actually ship.
 
-## Projects
+Tech stack:
+- Languages: TypeScript, JavaScript, Python, C++, SQL
+- Frontend: React, Next.js, Tailwind CSS, Shadcn UI, GSAP, Zustand
+- Backend: FastAPI, Node.js, Express.js, tRPC, Prisma
+- AI/LLM: Groq, Ollama, LangChain, ChromaDB, Pinecone, RAG pipelines, vector embeddings
+- Databases: MongoDB, SQLite, Firebase, PostgreSQL
 
-### CoverCraft (May 2026) — strongest recent project
-Full-stack AI cover letter and job application answer generator. React + FastAPI + Groq (Llama 3.3-70b),
-streaming responses via SSE for real-time generation. Semantic search over application history using
-ChromaDB and Ollama embeddings — supports natural language queries like "that fintech cover letter
-from last month". Dual-persistence architecture: every generation saved as both a ChromaDB vector and
-a SQLite record keyed by the same UUID. Full application status tracking: generated → applied →
-interview → offered/rejected.
+Tone: Deeply curious. Thinks about the problem space before jumping to solutions — wants to understand the why before the how. Direct and honest, no corporate fluff. Cares about craft and things that actually ship and get used. Not looking for just a job — looking for a place worth loving. Won't pretend to care about things he doesn't. Outside work: Valorant (genuinely good at game sense and strat-making — systems thinking with better graphics), music production, DJing.
 
-### Codebase Chat (April 2026)
-VS Code extension for natural language querying over any codebase. Embeds source files locally using
-Ollama's nomic-embed-text, storing vectors as JSON for complete code privacy. Replaced HNSWLib with
-a pure-JS cosine similarity implementation to eliminate native C++ build dependencies — works out of
-the box across all environments. Top-5 relevant chunks retrieved per query, passed as grounded context
-to Groq's Llama 3, with source file citations in every answer.
+Currently learning: RAG systems and AI agents — deep-diving into agentic AI and exploring more AI-based engineering. Genuinely believes autonomous agents are the right approach to solving real problems, not just hype.
 
-### Habit AI (Nov – Dec 2025)
-Full-stack AI-powered project management app. Next.js 14, TypeScript, tRPC for end-to-end type safety.
-Groq (Llama 3.3) for autonomous goal analysis and structured project plan generation with priorities.
-Kanban board with optimistic UI updates via @dnd-kit, progress metrics via Recharts.
+What I want: Real ownership over features and products. A team building something that matters, ideally with AI at the core. New learning and real engineering experience — not basic frontend work. Space to grow fast while AI is moving quickly. A culture worth loving — does his best work when he loves where he works.
 
-## Tech Stack
-Languages: TypeScript, JavaScript, Python, C++, SQL
-Frontend: React, Next.js 14, Tailwind CSS, GSAP, Shadcn UI, tRPC, Zustand
-Backend: FastAPI, Node.js, Express.js
-AI/ML: Groq API, Ollama, LangChain, ChromaDB, Pinecone, nomic-embed-text, Llama 3, RAG pipelines,
-        vector embeddings, agentic AI (actively learning)
-Databases: PostgreSQL, SQLite, MongoDB, Firebase
-Tools: Git, Prisma, Axios, Vercel
-
-## What I'm learning
-Agentic AI and RAG systems — I genuinely believe autonomous agents are the right approach to solving
-real problems, not just hype. Actively exploring LangChain and multi-agent architectures. Also getting
-into music production (been into music since I was a kid, now learning to create it).
-
-## Tone & personality
-Deeply curious. I think about the problem space before jumping to solutions. Direct and honest — no
-corporate fluff, no "I am passionate about leveraging synergies." I care about craft: clean code, good
-design, things that actually ship and get used. I'm not looking for a job, I'm looking for a place I
-can love working at. I won't pretend to care about things I don't.
-
-Outside work: Valorant (genuinely good at game sense and strat-making — systems thinking with better
-graphics), music production, DJing.
-
-## What I want
-- Real ownership over features or products, not ticket-grinding
-- A team building something that matters, ideally with AI at the core
-- Space to learn fast — AI is moving quickly and I want to be in the middle of it
-- Good culture — I do my best work when I love where I work
-
-## What I don't want
-- Stagnant CRUD work with no creative or technical challenge
-- Toxic grind culture where hours matter more than impact
-- Places where I'm just a cog with no visibility into the full system
-
-## Targeting
-SDE / Full-stack / AI-integrated roles at product companies and early-stage startups. Open to
-frontend-heavy, backend-heavy, or full-stack. Particularly interested in companies building with AI
-at the core — not retrofitting a chatbot onto an existing product.
+What I don't want: Stagnant, basic frontend or CRUD work with no technical or creative challenge. Toxic grind culture where hours matter more than impact. Being a cog with no visibility into the full system. Never use the words "passionate," "thrilled," or "excited."
