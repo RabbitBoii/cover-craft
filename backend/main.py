@@ -155,6 +155,36 @@ MODE_LABELS: dict[str, str] = {
 
 VALID_STATUSES: set[str] = {"generated", "applied", "interview", "offered", "rejected"}
 
+# Hard word ceilings per mode. Cover letters get more room; short-answer modes
+# stay tight so they don't read like essays.
+WORD_LIMITS: dict[str, int] = {
+    "cover_letter": 250,
+    "why_company": 150,
+    "what_interests": 150,
+    "strengths": 150,
+}
+DEFAULT_WORD_LIMIT = 200
+
+# Words/phrases that scream "an AI wrote this" or generic filler. The model is
+# instructed to avoid these and their close variants.
+BANNED_WORDS: list[str] = [
+    "passionate", "passion", "thrilled", "excited", "excitement", "enthusiastic",
+    "enthusiasm", "delighted", "eager", "elated", "honored", "humbled",
+    "delve", "leverage", "synergy", "tapestry", "realm", "landscape",
+    "spearheaded", "pivotal", "robust", "seamless", "cutting-edge",
+    "game-changer", "game-changing", "world-class", "best-in-class",
+    "dynamic", "results-driven", "detail-oriented", "go-getter", "team player",
+    "perfect fit", "perfect candidate", "hit the ground running",
+    "wear many hats", "think outside the box", "value add", "deep dive",
+]
+BANNED_PHRASES: list[str] = [
+    "I am writing to", "I am writing this letter to", "I would like to express",
+    "It is with great", "I am reaching out", "Please find attached",
+    "As you can see from my resume", "I believe I am the ideal",
+    "I am confident that", "Thank you for considering my application",
+    "Here is", "Here's", "Sure,", "Certainly,", "Of course,",
+]
+
 
 def _word_count(text: str) -> int:
     return len(text.strip().split())
@@ -248,27 +278,44 @@ async def generate(req: GenerateRequest) -> StreamingResponse:
 
     app_id = str(uuid.uuid4())
 
+    word_limit = WORD_LIMITS.get(req.mode, DEFAULT_WORD_LIMIT)
+    banned_list = ", ".join(BANNED_WORDS)
+    banned_phrase_list = "; ".join(f'"{p}"' for p in BANNED_PHRASES)
+
     system_prompt = (
-        "You are a professional job application assistant. "
-        "Use the user's personal context below to write responses that sound "
-        "authentically like them — not generic.\n\n"
+        "You are a job application writer. Using the user's personal context below, "
+        "write a response that sounds authentically like a real, specific person — "
+        "not like an AI or a template.\n\n"
         f"USER CONTEXT:\n{req.context}\n\n"
-        "Rules:\n"
-        "- Match the tone and personality described in the context\n"
-        "- Be specific and concrete, reference actual projects/skills from context\n"
-        "- No filler phrases, no clichés\n"
-        "- Sound human, not like a bot wrote it\n"
-        "- If a job description is provided, tailor tightly to it"
+        "HARD RULES (follow all):\n"
+        f"- LENGTH: Stay under {word_limit} words. Be tight and concrete. "
+        "No padding, no restating the question, no essay.\n"
+        "- Output ONLY the final text. No preamble, no sign-off labels, no "
+        "\"Here is...\", no markdown headers, no notes about what you did.\n"
+        f"- BANNED WORDS — never use these or their variants: {banned_list}.\n"
+        f"- BANNED OPENERS/PHRASES — never use: {banned_phrase_list}.\n"
+        "- Do NOT fabricate. Use only facts, projects, and skills present in the "
+        "user context. If something isn't in the context, don't claim it.\n"
+        "- Be specific: name actual projects, tools, numbers, and outcomes from "
+        "the context instead of abstract adjectives. Show, don't assert.\n"
+        "- Plain, direct language. Short sentences. Active voice. Vary sentence "
+        "length so it reads human, not robotic.\n"
+        "- Match the tone and personality described in the context.\n"
+        "- If a job description is provided, tailor tightly to its real "
+        "requirements — mirror its priorities, not its buzzwords."
     )
 
     mode_prompts: dict[str, str] = {
-        "cover_letter": "Write a compelling, tailored cover letter",
-        "why_company": "Answer 'Why do you want to work here?' authentically and specifically",
-        "what_interests": "Answer 'What interests you about this role?' with genuine enthusiasm and specifics",
-        "strengths": "Answer 'What are your key strengths for this role?' concisely and confidently",
+        "cover_letter": "Write a tailored cover letter",
+        "why_company": "Answer 'Why do you want to work here?' with specific, concrete reasons",
+        "what_interests": "Answer 'What interests you about this role?' with specifics tied to the user's real experience",
+        "strengths": "Answer 'What are your key strengths for this role?' with evidence, concisely",
     }
     mode_instruction = mode_prompts.get(req.mode, req.mode_label or req.mode)
-    user_msg = f'{mode_instruction} for the role of "{req.job_title}" at "{req.company}".'
+    user_msg = (
+        f'{mode_instruction} for the role of "{req.job_title}" at "{req.company}". '
+        f"Keep it under {word_limit} words."
+    )
     if req.jd.strip():
         user_msg += f"\n\nJob description:\n{req.jd}"
     if req.extra.strip():
