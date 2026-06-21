@@ -21,9 +21,12 @@ from google.genai import types
 from pinecone import Pinecone
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, String, Integer, Text
 from sqlalchemy.orm import DeclarativeBase, Session, Mapped, mapped_column
@@ -96,6 +99,26 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Coverizer API", version="1.0.0", lifespan=lifespan)
+
+# ── Rate limiting ─────────────────────────────────────────────────────────────
+# Keyed by client IP. Limits the expensive endpoints (/generate, /search) so a
+# single client can't spam generations and burn through the upstream API quotas.
+def _client_ip(request: Request) -> str:
+    """Resolve the real client IP behind Render's proxy.
+
+    Render forwards the original client in X-Forwarded-For; the left-most entry
+    is the real client. Without this, get_remote_address would return the proxy
+    IP and every user would share a single rate-limit bucket.
+    """
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return get_remote_address(request)
+
+
+limiter = Limiter(key_func=_client_ip)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore
 
 app.add_middleware(
     CORSMiddleware,
@@ -262,7 +285,8 @@ def health() -> dict:
 
 
 @app.post("/generate")
-async def generate(req: GenerateRequest) -> StreamingResponse:
+@limiter.limit("10/hour")
+async def generate(request: Request, req: GenerateRequest) -> StreamingResponse:
     """
     Stream Groq completion as SSE.
     After the stream ends, embed via Ollama and persist to SQLite + ChromaDB.
@@ -392,7 +416,8 @@ async def generate(req: GenerateRequest) -> StreamingResponse:
 
 
 @app.post("/search", response_model=list[SearchResultOut])
-def search(req: SearchRequest) -> list[SearchResultOut]:
+@limiter.limit("30/minute")
+def search(request: Request, req: SearchRequest) -> list[SearchResultOut]:
     """
     Embed query via Ollama → cosine search in ChromaDB → join metadata from SQLite.
     """
