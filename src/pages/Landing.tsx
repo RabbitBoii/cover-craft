@@ -56,27 +56,26 @@ function Hero() {
 
   return (
     <header className="relative overflow-hidden px-5 pt-20 pb-24 md:pt-32 md:pb-32">
-      {/* ambient glow */}
-      <div
-        aria-hidden
-        className="pointer-events-none absolute left-1/2 top-0 -z-10 h-[420px] w-[680px] max-w-[120vw] -translate-x-1/2 rounded-full opacity-60 blur-3xl"
-        style={{
-          background:
-            'radial-gradient(closest-side, rgba(232,224,208,0.10), rgba(167,139,250,0.06), transparent)',
-        }}
-      />
-
       <div className="mx-auto flex max-w-3xl flex-col items-center text-center">
         <motion.div
           initial={reduce ? false : { opacity: 0, scale: 0.85, y: -8 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           transition={{ duration: 0.6, ease: 'easeOut' }}
-          className="mb-8"
+          className="relative mb-8 flex items-center justify-center"
         >
+          {/* soft ambient halo — centered precisely on the mark */}
+          <div
+            aria-hidden
+            className="pointer-events-none absolute left-1/2 top-1/2 -z-10 h-[300px] w-[300px] -translate-x-1/2 -translate-y-1/2 rounded-full blur-[80px]"
+            style={{
+              background:
+                'radial-gradient(circle, rgba(232,224,208,0.08) 0%, rgba(167,139,250,0.045) 42%, transparent 72%)',
+            }}
+          />
           <img
             src={logo}
             alt="CoverCraft"
-            className="h-16 w-16 rounded-2xl object-cover ring-1 ring-white/10 shadow-[0_0_40px_rgba(167,139,250,0.25)]"
+            className="relative h-16 w-16 rounded-2xl object-cover ring-1 ring-white/10 shadow-[0_0_20px_rgba(167,139,250,0.14)]"
           />
         </motion.div>
 
