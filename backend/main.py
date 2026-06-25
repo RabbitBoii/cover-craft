@@ -21,14 +21,14 @@ from google.genai import types
 from pinecone import Pinecone
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 from pydantic import BaseModel, Field
-from sqlalchemy import create_engine, String, Integer, Text
+from sqlalchemy import create_engine, String, Integer, Text, text
 from sqlalchemy.orm import DeclarativeBase, Session, Mapped, mapped_column
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -75,6 +75,9 @@ class Application(Base):
     word_count: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String, nullable=False, default="generated")
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Anonymous per-browser owner ID (sent via the X-User-Id header). Nullable so
+    # pre-isolation rows don't break; backfill via backfill_user_id.py.
+    user_id: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(nullable=False, default=lambda: datetime.now(timezone.utc))
 
 
@@ -91,6 +94,12 @@ async def lifespan(app: FastAPI):
     """Run DB migrations on startup; gracefully warn if DB is unreachable."""
     try:
         Base.metadata.create_all(engine)
+        # Lightweight migration for pre-existing tables: add the nullable user_id
+        # column + index if they aren't there yet (create_all won't ALTER an
+        # existing table). Both statements are idempotent.
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE applications ADD COLUMN IF NOT EXISTS user_id VARCHAR"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_applications_user_id ON applications (user_id)"))
         logger.info("Database tables verified/created.")
     except Exception as exc:
         logger.warning("Could not connect to database at startup: %s", exc)
@@ -122,7 +131,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # ty
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "https://coverizer.vercel.app"],
+    allow_origins=["http://localhost:5173", "http://localhost:5174", "https://coverizer.vercel.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -247,12 +256,16 @@ def _get_embedding(text: str) -> list[float]:
         logger.error("Gemini embedding error: %s", exc)
         raise HTTPException(status_code=502, detail=f"Embedding failed: {exc}")
 
-def _persist(app_id: str, req: GenerateRequest, full_text: str) -> None:
-    """Save metadata to SQLite and the embedding vector to ChromaDB."""
+def _persist(app_id: str, req: GenerateRequest, full_text: str, user_id: Optional[str]) -> None:
+    """Save metadata to Postgres and the embedding vector to Pinecone.
+
+    The owning user_id is stored on both the Postgres row and the Pinecone
+    vector metadata so that reads can be filtered per browser.
+    """
     wc = _word_count(full_text)
     mode_label = req.mode_label or MODE_LABELS.get(req.mode, req.mode)
 
-    # 1. SQLite
+    # 1. Postgres
     with Session(engine) as session:
         record = Application(
             id=app_id,
@@ -263,18 +276,23 @@ def _persist(app_id: str, req: GenerateRequest, full_text: str) -> None:
             text=full_text,
             word_count=wc,
             status="generated",
+            user_id=user_id,
         )
         session.add(record)
         session.commit()
 
     # 2. Embed → Pinecone
     embedding = _get_embedding(full_text)
+    metadata: dict = {"job_title": req.job_title, "company": req.company, "mode": req.mode}
+    # Pinecone rejects null metadata values, so only set user_id when present.
+    if user_id:
+        metadata["user_id"] = user_id
     index.upsert(vectors=[{
         "id": app_id,
         "values": embedding,
-        "metadata": {"job_title": req.job_title, "company": req.company, "mode": req.mode}
+        "metadata": metadata,
 }])
-    logger.info("Persisted application %s", app_id)
+    logger.info("Persisted application %s for user %s", app_id, user_id)
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -286,7 +304,11 @@ def health() -> dict:
 
 @app.post("/generate")
 @limiter.limit("10/hour")
-async def generate(request: Request, req: GenerateRequest) -> StreamingResponse:
+async def generate(
+    request: Request,
+    req: GenerateRequest,
+    x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+) -> StreamingResponse:
     """
     Stream Groq completion as SSE.
     After the stream ends, embed via Ollama and persist to SQLite + ChromaDB.
@@ -395,7 +417,7 @@ async def generate(request: Request, req: GenerateRequest) -> StreamingResponse:
 
             # Persist
             try:
-                _persist(app_id, req, full_text)
+                _persist(app_id, req, full_text, x_user_id)
                 yield f"data: {json.dumps({'type': 'saved', 'id': app_id})}\n\n"
             except Exception as save_err:
                 logger.error("Persist error: %s", save_err)
@@ -417,16 +439,26 @@ async def generate(request: Request, req: GenerateRequest) -> StreamingResponse:
 
 @app.post("/search", response_model=list[SearchResultOut])
 @limiter.limit("30/minute")
-def search(request: Request, req: SearchRequest) -> list[SearchResultOut]:
+def search(
+    request: Request,
+    req: SearchRequest,
+    x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+) -> list[SearchResultOut]:
     """
-    Embed query via Ollama → cosine search in ChromaDB → join metadata from SQLite.
+    Embed query via Gemini → semantic search in Pinecone (scoped to the calling
+    user via a metadata filter) → join metadata from Postgres.
     """
+    # No user → nothing of theirs to search.
+    if not x_user_id:
+        return []
+
     query_embedding = _get_embedding(req.query)
 
     raw = index.query(
-    vector=query_embedding,
+        vector=query_embedding,
         top_k=req.top_k,
-        include_metadata=True
+        include_metadata=True,
+        filter={"user_id": x_user_id},
     )
 
     matches = raw.get("matches", [])
@@ -441,7 +473,11 @@ def search(request: Request, req: SearchRequest) -> list[SearchResultOut]:
         return []
 
     with Session(engine) as session:
-        records = session.query(Application).filter(Application.id.in_(id_list)).all()
+        records = (
+            session.query(Application)
+            .filter(Application.id.in_(id_list), Application.user_id == x_user_id)
+            .all()
+        )
 
     record_map: dict[str, Application] = {r.id: r for r in records}
     out: list[SearchResultOut] = []
@@ -463,9 +499,13 @@ def search(request: Request, req: SearchRequest) -> list[SearchResultOut]:
 
 
 @app.patch("/applications/{app_id}/status", response_model=ApplicationOut)
-def update_status(app_id: str, patch: StatusPatch) -> ApplicationOut:
+def update_status(
+    app_id: str,
+    patch: StatusPatch,
+    x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+) -> ApplicationOut:
     """
-    Update application status and/or notes in SQLite.
+    Update application status and/or notes in Postgres (only the caller's own).
     Valid statuses: generated → applied → interview → offered → rejected
     """
     if patch.status not in VALID_STATUSES:
@@ -473,9 +513,15 @@ def update_status(app_id: str, patch: StatusPatch) -> ApplicationOut:
             status_code=422,
             detail=f"Invalid status '{patch.status}'. Must be one of: {sorted(VALID_STATUSES)}",
         )
+    if not x_user_id:
+        raise HTTPException(status_code=404, detail=f"Application '{app_id}' not found")
 
     with Session(engine) as session:
-        record = session.query(Application).filter(Application.id == app_id).first()
+        record = (
+            session.query(Application)
+            .filter(Application.id == app_id, Application.user_id == x_user_id)
+            .first()
+        )
         if record is None:
             raise HTTPException(status_code=404, detail=f"Application '{app_id}' not found")
 
@@ -489,18 +535,40 @@ def update_status(app_id: str, patch: StatusPatch) -> ApplicationOut:
 
 
 @app.get("/applications", response_model=list[ApplicationOut])
-def list_applications() -> list[ApplicationOut]:
-    """Return all applications, newest first."""
+def list_applications(
+    x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+) -> list[ApplicationOut]:
+    """Return the calling user's applications, newest first.
+
+    Without an X-User-Id header there's no one to scope to, so return empty
+    rather than leaking everyone's history.
+    """
+    if not x_user_id:
+        return []
     with Session(engine) as session:
-        records = session.query(Application).order_by(Application.created_at.desc()).all()
+        records = (
+            session.query(Application)
+            .filter(Application.user_id == x_user_id)
+            .order_by(Application.created_at.desc())
+            .all()
+        )
         return [_record_to_out(r) for r in records]
 
 
 @app.delete("/applications/{app_id}", status_code=204)
-def delete_application(app_id: str) -> None:
-    """Delete an application from SQLite and ChromaDB."""
+def delete_application(
+    app_id: str,
+    x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+) -> None:
+    """Delete the caller's own application from Postgres and Pinecone."""
+    if not x_user_id:
+        raise HTTPException(status_code=404, detail=f"Application '{app_id}' not found")
     with Session(engine) as session:
-        record = session.query(Application).filter(Application.id == app_id).first()
+        record = (
+            session.query(Application)
+            .filter(Application.id == app_id, Application.user_id == x_user_id)
+            .first()
+        )
         if record is None:
             raise HTTPException(status_code=404, detail=f"Application '{app_id}' not found")
         session.delete(record)

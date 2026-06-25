@@ -8,6 +8,26 @@
 
 const BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
+// ── Anonymous per-browser identity ────────────────────────────────────────────
+// No auth: on first load we mint a random UUID, persist it in localStorage, and
+// send it as X-User-Id on every request so the backend can scope each browser's
+// generations to itself.
+const USER_ID_KEY = 'cc_user_id';
+
+export function getUserId(): string {
+  let id = localStorage.getItem(USER_ID_KEY);
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem(USER_ID_KEY, id);
+  }
+  return id;
+}
+
+/** Merge the X-User-Id header into any other headers for a request. */
+function withUser(headers: Record<string, string> = {}): Record<string, string> {
+  return { 'X-User-Id': getUserId(), ...headers };
+}
+
 // ── Types (extend / replace old localStorage shapes) ──────────────────────────
 
 export type ApplicationStatus =
@@ -69,7 +89,7 @@ export async function generateStream(
 ): Promise<void> {
   const res = await fetch(`${BASE}/generate`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: withUser({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(params),
     signal,
   });
@@ -118,7 +138,7 @@ export async function searchApplications(
 ): Promise<SearchResultOut[]> {
   const res = await fetch(`${BASE}/search`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: withUser({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ query, top_k }),
   });
   if (!res.ok) throw new Error(`Search failed: ${res.status}`);
@@ -135,7 +155,7 @@ export async function updateApplicationStatus(
 ): Promise<ApplicationOut> {
   const res = await fetch(`${BASE}/applications/${id}/status`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: withUser({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ status, notes }),
   });
   if (!res.ok) throw new Error(`Status update failed: ${res.status}`);
@@ -146,7 +166,7 @@ export async function updateApplicationStatus(
  * GET /applications — list all saved applications.
  */
 export async function listApplications(): Promise<ApplicationOut[]> {
-  const res = await fetch(`${BASE}/applications`);
+  const res = await fetch(`${BASE}/applications`, { headers: withUser() });
   if (!res.ok) throw new Error(`List failed: ${res.status}`);
   return res.json() as Promise<ApplicationOut[]>;
 }
@@ -155,6 +175,9 @@ export async function listApplications(): Promise<ApplicationOut[]> {
  * DELETE /applications/:id
  */
 export async function deleteApplication(id: string): Promise<void> {
-  const res = await fetch(`${BASE}/applications/${id}`, { method: 'DELETE' });
+  const res = await fetch(`${BASE}/applications/${id}`, {
+    method: 'DELETE',
+    headers: withUser(),
+  });
   if (!res.ok && res.status !== 204) throw new Error(`Delete failed: ${res.status}`);
 }
