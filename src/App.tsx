@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import logo from './assets/logo.svg';
 import type { Mode, TabId, EmbedStatus } from './types';
 import {
@@ -238,10 +239,10 @@ function App() {
     <div className="flex h-screen overflow-hidden">
       {/* ── Sidebar (desktop only) ── */}
       <aside className="hidden md:flex w-[280px] min-w-[280px] bg-bg-2 border-r border-border-main flex-col px-4 py-6 gap-8">
-        <div className="flex items-center gap-2.5">
+        <Link to="/" className="flex items-center gap-2.5 no-underline">
           <img src={logo} alt="CoverCraft" className="w-9 h-9 rounded-lg object-cover ring-1 ring-white/10 shadow-[0_0_14px_rgba(167,139,250,0.22)]" />
           <span className="font-serif text-[18px] text-text-main tracking-tight">CoverCraft</span>
-        </div>
+        </Link>
 
         <nav className="flex flex-col gap-0.5">
           {([
@@ -287,10 +288,10 @@ function App() {
 
       {/* ── Mobile Top Header ── */}
       <header className="md:hidden fixed top-0 left-0 right-0 z-50 bg-bg-2/95 backdrop-blur border-b border-border-main flex items-center justify-between px-4 py-3">
-        <div className="flex items-center gap-2.5">
+        <Link to="/" className="flex items-center gap-2.5 no-underline">
           <img src={logo} alt="CoverCraft" className="w-8 h-8 rounded-lg object-cover ring-1 ring-white/10 shadow-[0_0_12px_rgba(167,139,250,0.22)]" />
           <span className="font-serif text-[16px] text-text-main tracking-tight">CoverCraft</span>
-        </div>
+        </Link>
         <div className="flex items-center gap-1.5">
           {context && (
             <div className="flex items-center gap-1.5 text-[11px] text-text-2 px-2 py-1 rounded-md bg-bg-3 border border-border-main">
@@ -642,12 +643,12 @@ function App() {
                 const score = 'score' in cover ? (cover as SearchResultOut).score : null;
                 return (
                   <div key={cover.id} className={`bg-bg-2 border rounded-xl p-4 flex flex-col gap-2.5 transition-colors hover:border-border-2 ${isExpanded ? 'border-border-2' : 'border-border-main'}`}>
-                    <div className="flex items-start justify-between gap-2 flex-wrap sm:flex-nowrap">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                       <div className="flex items-start gap-3 flex-1 min-w-0">
                         <span className="text-lg shrink-0 mt-0.5">
                           {MODES.find((m) => m.id === cover.mode)?.icon ?? '📄'}
                         </span>
-                        <div>
+                        <div className="min-w-0">
                           <div className="text-[13px] text-text-main font-medium truncate">{cover.company} — {cover.jobTitle}</div>
                           <div className="flex gap-1.5 text-[11px] text-text-3 mt-0.5 flex-wrap">
                             <span>{cover.modeLabel}</span>
@@ -658,7 +659,7 @@ function App() {
                           </div>
                         </div>
                       </div>
-                      <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+                      <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-start sm:justify-end">
                         {score !== null && (
                           <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-purple-400/10 text-purple-400 border border-purple-400/20">{(score * 100).toFixed(0)}%</span>
                         )}

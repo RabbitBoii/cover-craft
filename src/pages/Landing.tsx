@@ -55,7 +55,7 @@ function Hero() {
   const reduce = useReducedMotion();
 
   return (
-    <header className="relative overflow-hidden px-5 pt-20 pb-24 md:pt-32 md:pb-32">
+    <header className="relative overflow-hidden px-5 pt-20 pb-12 md:pt-32 md:pb-16">
       <div className="mx-auto flex max-w-3xl flex-col items-center text-center">
         <motion.div
           initial={reduce ? false : { opacity: 0, scale: 0.85, y: -8 }}
@@ -112,8 +112,8 @@ function Hero() {
           transition={{ duration: 0.6, delay: 0.7 }}
           className="mt-6 max-w-xl font-mono text-[13px] leading-relaxed text-text-2 sm:text-[14px]"
         >
-          Stop re-explaining yourself to an LLM every time. Set your context once —
-          CoverCraft writes every cover letter and application answer in your voice.
+          Tell it who you are once. It writes every cover letter and application
+          answer like you would.
         </motion.p>
 
         <motion.div
