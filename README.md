@@ -14,13 +14,12 @@ AI-powered cover letter and job-application answer generator. Paste your context
 |---|---|
 | Frontend | React 19, TypeScript, Tailwind CSS v4, Vite 8 — deployed on **Vercel** |
 | Backend | FastAPI (single-file `backend/main.py`) — deployed on **Render** |
-| LLM | Groq API — `llama-3.3-70b-versatile`, streamed over SSE |
+| LLM | Groq API — `openai/gpt-oss-120b` (`reasoning_effort: low`), streamed over SSE |
 | Embeddings | Google Gemini — 768-dim vectors |
-| Vector store | Pinecone (index `coverizer`) |
-| Database | Postgres via SQLAlchemy (Supabase in deployment) |
+| Database + vector store | Postgres with **pgvector** via SQLAlchemy (Supabase in deployment) — row and embedding live in the same table |
 | Rate limiting | slowapi — keyed by client IP |
 
-> **Note:** earlier versions ran fully local (Ollama embeddings + ChromaDB + SQLite). That path has been replaced by the managed services above. Leftover `backend/coverizer.db`, `chroma_store/`, `src/lib/ollama.ts`, and `src/lib/storage.ts` are legacy and unused.
+> **Note:** earlier versions ran fully local (Ollama embeddings + ChromaDB + SQLite), then briefly used Pinecone as a separate vector store. Both paths have been replaced: vectors now live in a pgvector column next to the row itself. Leftover `backend/coverizer.db`, `chroma_store/`, `src/lib/ollama.ts`, and `src/lib/storage.ts` are legacy and unused.
 
 ---
 
@@ -33,6 +32,7 @@ coverizer/
 │   ├── requirements.txt
 │   ├── Procfile             # uvicorn entrypoint for Render
 │   ├── .env                 # API keys + DATABASE_URL (not committed)
+│   ├── backfill_embeddings.py  # one-off: re-embed rows missing a vector (pgvector migration)
 │   └── test_pipeline.py     # live end-to-end smoke test (needs a running server)
 ├── src/
 │   ├── lib/
@@ -55,8 +55,7 @@ coverizer/
 - API keys / connection strings for:
   - **Groq** — free tier at [console.groq.com](https://console.groq.com)
   - **Google Gemini** — [aistudio.google.com](https://aistudio.google.com)
-  - **Pinecone** — an index named `coverizer` ([pinecone.io](https://www.pinecone.io))
-  - **Postgres** — any Postgres URL (e.g. a free [Supabase](https://supabase.com) project)
+  - **Postgres with pgvector** — any Postgres URL where the `vector` extension is available (e.g. a free [Supabase](https://supabase.com) project; the backend runs `CREATE EXTENSION IF NOT EXISTS vector` on startup)
 
 ---
 
@@ -88,7 +87,6 @@ Create `backend/.env`:
 ```
 GROQ_API_KEY=gsk_your_key_here
 GEMINI_API_KEY=your_gemini_key
-PINECONE_KEY=your_pinecone_key      # note: PINECONE_KEY, not PINECONE_API_KEY
 DATABASE_URL=postgresql://user:pass@host:5432/dbname
 ```
 
@@ -122,14 +120,14 @@ python test_pipeline.py
 ### Generation
 1. You fill in job title, company, mode, and optionally paste the JD / extra instructions.
 2. Frontend hits `POST /generate`.
-3. Backend calls Groq (`llama-3.3-70b-versatile`) and streams the response back via **SSE** (event types `chunk` / `done` / `saved` / `error`).
-4. Once the stream finishes, the output is embedded with Gemini, the vector is upserted to **Pinecone**, and the metadata row is written to **Postgres** — both keyed by the same UUID.
+3. Backend calls Groq (`openai/gpt-oss-120b`, a reasoning model run at `reasoning_effort: low` so first token arrives fast; reasoning tokens stay out of the SSE stream) and streams the response back via **SSE** (event types `chunk` / `done` / `saved` / `error`).
+4. Once the stream finishes, the output is embedded with Gemini and the row — text, metadata, **and** the 768-dim vector — is written to **Postgres** in a single transaction. Embedding happens *before* the insert, so a row can never exist without its vector (and a vector can never outlive its row).
 5. Frontend shows the "Embedded & saved to History" confirmation.
 
 ### Semantic search
 1. You type a query in the History tab ("that fintech cover letter from last month").
 2. Frontend hits `POST /search`.
-3. Backend embeds the query with Gemini, queries Pinecone for the top-k IDs + scores, joins the full records from Postgres, and returns them ranked by similarity.
+3. Backend embeds the query with Gemini and runs a single pgvector cosine-distance query (`ORDER BY embedding <=> query LIMIT k`, scoped to your user id) — no separate vector store, no cross-store ID join. An HNSW index keeps it fast as history grows.
 
 ### Application tracking
 - Every generated cover starts with status `generated`.
@@ -174,8 +172,9 @@ The more specific and honest this is, the better every output gets.
 ## Deployment notes
 
 - **Frontend** → Vercel. Set `VITE_API_URL` to the backend's public URL.
-- **Backend** → Render via `backend/Procfile` (`uvicorn main:app --host 0.0.0.0 --port $PORT`). Set `GROQ_API_KEY`, `GEMINI_API_KEY`, `PINECONE_KEY`, and `DATABASE_URL` as environment variables.
+- **Backend** → Render via `backend/Procfile` (`uvicorn main:app --host 0.0.0.0 --port $PORT`). Set `GROQ_API_KEY`, `GEMINI_API_KEY`, and `DATABASE_URL` as environment variables.
 - CORS `allow_origins` in `main.py` is an explicit allowlist (`localhost:5173` + the deployed Vercel URL) — add any new frontend origin there.
+- **Migrating from a pre-pgvector deployment:** startup auto-adds the `embedding` column, but rows generated while Pinecone was the vector store will have it NULL and won't appear in search until you run `python backfill_embeddings.py` (re-embeds them from the text already in Postgres). Once that's done, the Pinecone index and `PINECONE_KEY` env var can be deleted.
 
 ---
 

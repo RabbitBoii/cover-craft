@@ -9,9 +9,8 @@ Usage (from backend/, with the venv active and .env populated):
 Where <user_id> is the value your browser stored in localStorage under
 `cc_user_id` (DevTools → Application → Local Storage → cc_user_id).
 
-It updates BOTH:
-  - the Postgres `applications` rows (user_id column), and
-  - the matching Pinecone vector metadata (so semantic search finds them).
+Row and vector now live in the same Postgres table (pgvector), so updating the
+user_id column is all that's needed — search filters pick it up immediately.
 
 Safe to re-run: only rows that are still NULL get touched.
 """
@@ -22,14 +21,11 @@ import os
 import sys
 
 from dotenv import load_dotenv
-from pinecone import Pinecone
 from sqlalchemy import create_engine, text
 
 load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
-PINECONE_API_KEY = os.getenv("PINECONE_KEY", "")
-PINECONE_INDEX = "coverizer"
 
 
 def main() -> None:
@@ -61,24 +57,6 @@ def main() -> None:
         )
 
     print(f"Postgres: assigned {len(null_ids)} row(s) to user_id={user_id}")
-
-    # 2. Mirror the owner onto the Pinecone vector metadata so search filters work.
-    if not PINECONE_API_KEY:
-        print("PINECONE_KEY not set — skipped Pinecone metadata backfill.")
-        return
-
-    pc = Pinecone(api_key=PINECONE_API_KEY)
-    index = pc.Index(PINECONE_INDEX)
-
-    updated = 0
-    for vec_id in null_ids:
-        try:
-            index.update(id=vec_id, set_metadata={"user_id": user_id})
-            updated += 1
-        except Exception as exc:  # noqa: BLE001 - best-effort, keep going
-            print(f"  ! Pinecone update failed for {vec_id}: {exc}")
-
-    print(f"Pinecone: updated metadata on {updated}/{len(null_ids)} vector(s).")
     print("Done.")
 
 

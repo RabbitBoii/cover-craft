@@ -130,7 +130,7 @@ export async function generateStream(
 }
 
 /**
- * POST /search — semantic search via ChromaDB.
+ * POST /search — semantic search via pgvector.
  */
 export async function searchApplications(
   query: string,

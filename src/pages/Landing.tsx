@@ -330,7 +330,7 @@ function HowItWorks() {
    Closing CTA + Footer
    ───────────────────────────────────────────────────────────── */
 
-const TECH = ['React', 'FastAPI', 'Groq', 'Pinecone'];
+const TECH = ['React', 'FastAPI', 'Groq', 'pgvector'];
 
 function Footer() {
   return (

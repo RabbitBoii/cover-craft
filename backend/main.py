@@ -1,13 +1,14 @@
 """
 Coverizer FastAPI Backend
-- POST /generate       : Groq streaming (SSE) + Ollama embed + ChromaDB + SQLite
-- POST /search         : Semantic search via ChromaDB + SQLite metadata join
+- POST /generate       : Groq streaming (SSE) + Gemini embed + Postgres/pgvector persist
+- POST /search         : Semantic search via pgvector cosine distance (single SQL query)
 - PATCH /applications/:id/status : Update application status & notes
 """
 
 from __future__ import annotations
 from contextlib import asynccontextmanager
 
+import asyncio
 import json
 import os
 import uuid
@@ -18,7 +19,7 @@ from typing import AsyncGenerator, Literal, Optional
 
 from google import genai
 from google.genai import types
-from pinecone import Pinecone
+from pgvector.sqlalchemy import Vector
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Header
@@ -39,20 +40,25 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
-GROQ_MODEL: str = "llama-3.3-70b-versatile"
+GROQ_MODEL: str = "openai/gpt-oss-120b"
 GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
 
 GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
-PINECONE_API_KEY: str = os.getenv("PINECONE_KEY", "")
 genai_client = genai.Client(api_key=GEMINI_API_KEY)
-PINECONE_INDEX: str = "coverizer"    
+EMBED_DIM = 768
 DATABASE_URL: str = os.getenv("DATABASE_URL", "")
 
 
 
 # ── Postgres ────────────────────────────────────────────────────────────────
 
-engine = create_engine(DATABASE_URL, connect_args={"connect_timeout": 10})
+# pool_pre_ping: Supabase's pooler drops idle connections; without it the first
+# request after a quiet period fails on a stale connection from the pool.
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    connect_args={"connect_timeout": 10},
+)
 
 
 class Base(DeclarativeBase):
@@ -78,14 +84,14 @@ class Application(Base):
     # Anonymous per-browser owner ID (sent via the X-User-Id header). Nullable so
     # pre-isolation rows don't break; backfill via backfill_user_id.py.
     user_id: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
+    # 768-dim Gemini embedding, stored alongside the row so text + vector are
+    # written in one transaction. Nullable only for pre-pgvector rows; backfill
+    # via backfill_embeddings.py.
+    embedding: Mapped[Optional[list[float]]] = mapped_column(Vector(EMBED_DIM), nullable=True)
     created_at: Mapped[datetime] = mapped_column(nullable=False, default=lambda: datetime.now(timezone.utc))
 
 
 # create_all is called in the lifespan startup event below
-
-GEMINI_EMBED_MODEL = "models/text-embedding-004"
-pc = Pinecone(api_key=PINECONE_API_KEY)
-index = pc.Index(PINECONE_INDEX)
 
 
 # ── FastAPI ───────────────────────────────────────────────────────────────────
@@ -93,13 +99,20 @@ index = pc.Index(PINECONE_INDEX)
 async def lifespan(app: FastAPI):
     """Run DB migrations on startup; gracefully warn if DB is unreachable."""
     try:
+        # pgvector extension must exist before create_all touches the Vector column.
+        with engine.begin() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         Base.metadata.create_all(engine)
-        # Lightweight migration for pre-existing tables: add the nullable user_id
-        # column + index if they aren't there yet (create_all won't ALTER an
-        # existing table). Both statements are idempotent.
+        # Lightweight migrations for pre-existing tables (create_all won't ALTER
+        # an existing table). All statements are idempotent.
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE applications ADD COLUMN IF NOT EXISTS user_id VARCHAR"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_applications_user_id ON applications (user_id)"))
+            conn.execute(text(f"ALTER TABLE applications ADD COLUMN IF NOT EXISTS embedding vector({EMBED_DIM})"))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_applications_embedding_hnsw "
+                "ON applications USING hnsw (embedding vector_cosine_ops)"
+            ))
         logger.info("Database tables verified/created.")
     except Exception as exc:
         logger.warning("Could not connect to database at startup: %s", exc)
@@ -239,7 +252,7 @@ def _record_to_out(record: Application) -> ApplicationOut:
 
 
 def _get_embedding(text: str) -> list[float]:
-    """Call Gemini text-embedding-004 via stable SDK and return the embedding vector."""
+    """Embed text with Gemini and return the 768-dim vector."""
     try:
         result = genai_client.models.embed_content(
             model="gemini-embedding-2",
@@ -257,41 +270,30 @@ def _get_embedding(text: str) -> list[float]:
         raise HTTPException(status_code=502, detail=f"Embedding failed: {exc}")
 
 def _persist(app_id: str, req: GenerateRequest, full_text: str, user_id: Optional[str]) -> None:
-    """Save metadata to Postgres and the embedding vector to Pinecone.
+    """Embed the text, then save row + vector to Postgres in one transaction.
 
-    The owning user_id is stored on both the Postgres row and the Pinecone
-    vector metadata so that reads can be filtered per browser.
+    Embedding happens BEFORE the insert so a row can never exist without its
+    vector: either everything is saved, or nothing is and the caller reports
+    the failure. Blocking I/O throughout — run via asyncio.to_thread from
+    async contexts.
     """
-    wc = _word_count(full_text)
-    mode_label = req.mode_label or MODE_LABELS.get(req.mode, req.mode)
+    embedding = _get_embedding(full_text)
 
-    # 1. Postgres
     with Session(engine) as session:
         record = Application(
             id=app_id,
             job_title=req.job_title,
             company=req.company,
             mode=req.mode,
-            mode_label=mode_label,
+            mode_label=req.mode_label or MODE_LABELS.get(req.mode, req.mode),
             text=full_text,
-            word_count=wc,
+            word_count=_word_count(full_text),
             status="generated",
             user_id=user_id,
+            embedding=embedding,
         )
         session.add(record)
         session.commit()
-
-    # 2. Embed → Pinecone
-    embedding = _get_embedding(full_text)
-    metadata: dict = {"job_title": req.job_title, "company": req.company, "mode": req.mode}
-    # Pinecone rejects null metadata values, so only set user_id when present.
-    if user_id:
-        metadata["user_id"] = user_id
-    index.upsert(vectors=[{
-        "id": app_id,
-        "values": embedding,
-        "metadata": metadata,
-}])
     logger.info("Persisted application %s for user %s", app_id, user_id)
 
 
@@ -311,7 +313,7 @@ async def generate(
 ) -> StreamingResponse:
     """
     Stream Groq completion as SSE.
-    After the stream ends, embed via Ollama and persist to SQLite + ChromaDB.
+    After the stream ends, embed via Gemini and persist row + vector to Postgres.
 
     SSE events:
       data: {"type": "chunk",  "text": "..."}
@@ -386,7 +388,11 @@ async def generate(
                         ],
                         "stream": True,
                         "temperature": 0.7,
-                        "max_tokens": 2048,
+                        # gpt-oss is a reasoning model: keep effort low so the
+                        # (invisible) reasoning phase doesn't delay first token,
+                        # and budget extra tokens since reasoning counts too.
+                        "reasoning_effort": "low",
+                        "max_tokens": 4096,
                     },
                 ) as response:
                     if response.status_code != 200:
@@ -415,9 +421,10 @@ async def generate(
             wc = _word_count(full_text)
             yield f"data: {json.dumps({'type': 'done', 'id': app_id, 'wordCount': wc})}\n\n"
 
-            # Persist
+            # Persist — in a worker thread so the sync embed + DB write don't
+            # block the event loop (and every other request) while they run.
             try:
-                _persist(app_id, req, full_text, x_user_id)
+                await asyncio.to_thread(_persist, app_id, req, full_text, x_user_id)
                 yield f"data: {json.dumps({'type': 'saved', 'id': app_id})}\n\n"
             except Exception as save_err:
                 logger.error("Persist error: %s", save_err)
@@ -445,8 +452,9 @@ def search(
     x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
 ) -> list[SearchResultOut]:
     """
-    Embed query via Gemini → semantic search in Pinecone (scoped to the calling
-    user via a metadata filter) → join metadata from Postgres.
+    Embed query via Gemini → pgvector cosine search in Postgres, scoped to the
+    calling user. Row and vector live in the same table, so this is one query —
+    no cross-store ID join.
     """
     # No user → nothing of theirs to search.
     if not x_user_id:
@@ -454,48 +462,27 @@ def search(
 
     query_embedding = _get_embedding(req.query)
 
-    raw = index.query(
-        vector=query_embedding,
-        top_k=req.top_k,
-        include_metadata=True,
-        filter={"user_id": x_user_id},
-    )
-
-    matches = raw.get("matches", [])
-    if not matches:
-        return []
-
-    id_list = [match['id'] for match in matches]
-    dist_list = [match['score'] for match in matches]
-
-
-    if not id_list:
-        return []
-
+    distance = Application.embedding.cosine_distance(query_embedding)
     with Session(engine) as session:
-        records = (
-            session.query(Application)
-            .filter(Application.id.in_(id_list), Application.user_id == x_user_id)
+        rows = (
+            session.query(Application, distance.label("distance"))
+            .filter(
+                Application.user_id == x_user_id,
+                Application.embedding.isnot(None),
+            )
+            .order_by(distance)
+            .limit(req.top_k)
             .all()
         )
 
-    record_map: dict[str, Application] = {r.id: r for r in records}
-    out: list[SearchResultOut] = []
-
-    for rid, dist in zip(id_list, dist_list):
-        record = record_map.get(rid)
-        if record is None:
-            continue
-        score = round(float(dist), 4)  # cosine distance → similarity
-        out.append(
-            SearchResultOut(
-                **_record_to_out(record).model_dump(),
-                score=score,
-            )
+    # cosine distance → similarity; rows arrive nearest-first already.
+    return [
+        SearchResultOut(
+            **_record_to_out(record).model_dump(),
+            score=round(1.0 - float(dist), 4),
         )
-
-    out.sort(key=lambda x: x.score, reverse=True)
-    return out
+        for record, dist in rows
+    ]
 
 
 @app.patch("/applications/{app_id}/status", response_model=ApplicationOut)
@@ -560,7 +547,8 @@ def delete_application(
     app_id: str,
     x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
 ) -> None:
-    """Delete the caller's own application from Postgres and Pinecone."""
+    """Delete the caller's own application. Row and vector share the table, so
+    one DELETE removes both — nothing can be left orphaned."""
     if not x_user_id:
         raise HTTPException(status_code=404, detail=f"Application '{app_id}' not found")
     with Session(engine) as session:
@@ -573,8 +561,3 @@ def delete_application(
             raise HTTPException(status_code=404, detail=f"Application '{app_id}' not found")
         session.delete(record)
         session.commit()
-
-    try:
-        index.delete(ids=[app_id])
-    except Exception as exc:
-        logger.warning("ChromaDB delete warning for %s: %s", app_id, exc)
