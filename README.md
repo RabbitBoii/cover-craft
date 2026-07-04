@@ -4,7 +4,13 @@ AI-powered cover letter and job-application answer generator. Paste your context
 
 **Live app → [coverizer.vercel.app](https://coverizer.vercel.app)**
 
-![CoverCraft screenshot](public/ss.png)
+---
+
+## Showcase
+
+| Landing page | Context | Output |
+|---|---|---|
+| ![Landing page](public/ss2.png) | ![Output tab](public/ss3.png) | ![Context tab](public/ss.png) |
 
 ---
 
