@@ -270,7 +270,7 @@ function App() {
         <div className="mt-auto">
           <div className="flex items-center gap-1.5 text-[11px] text-text-3 px-2.5 py-1.5 mb-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-purple-400 shrink-0 shadow-[0_0_6px_rgba(167,139,250,0.5)]" />
-            <span>llama-3.3-70b</span>
+            <span>gpt-oss-120b</span>
           </div>
           {context ? (
             <div className="flex items-center gap-1.5 text-xs text-text-2 px-2.5 py-2 rounded-md bg-bg-3 border border-border-main overflow-hidden">
